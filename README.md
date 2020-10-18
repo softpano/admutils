@@ -1,4 +1,5 @@
-# Preannouncement of admutils -- Softpanorama collection of potentially useful utilities
+# Preannouncement of admutils
+# Softpanorama collection of potentially useful sysadmin utilities
 
 Currently we plan to include the following written by me over the years utilities (this plan subject to change without notice):
 
