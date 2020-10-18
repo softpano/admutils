@@ -1,8 +1,11 @@
 # Preannouncement of admutils
 # Softpanorama collection of potentially useful sysadmin utilities
 
-Currently we plan to include the following written by me over the years utilities (this plan subject to change without notice):
- See readme.shtml for more information
+Currently we plan to include the following written by me over the years utilities (this plan subject to change without notice). this page is not maintained often as I prefer HTML to Markup. 
+
+See html version of this page https://github.com/softpano/admutils/readme.shtml for more recent and complete information
+
+## List of utilities 
 
 1. *dormant_user_stats* -- list users who were inactive for the specified number of days (default is 365). Calculates I-nodes usage too. 
 1. *etcdiff* -- Creates tar file and  displays files changes since previous invocations and differences. Can be used as a stage to GIT or for the control of actions of multiple sysadmins with the utility etcpolice.
