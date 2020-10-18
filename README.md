@@ -3,7 +3,7 @@
 
 This project is about a set of written by me over the years utilities (this plan subject to change without notice), which I eventually decided to publish in a hole that other can benefit from them too. 
 
-**NOTE**: This page is not maintained often as I prefer HTML to Markup. See html version of this page [https://github.com/softpano/admutils/readme.shtml](readme.shtml) for more recent and complete information
+**NOTE**: This page is not maintained often as I prefer HTML to Markup. See html version of this page [readme.shtml](https://github.com/softpano/admutils/readme.shtml) for more recent and complete information
 
 ##HISTORY##
 
