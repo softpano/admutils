@@ -23,3 +23,8 @@ on but main interface is not available or vise versa
 1. rootpolice -- verifies that all changes in  /etc are all documented in git. Useful if mutile sysadmin exists for the server. 
 1. useractivity -- collects statistics including IPs of user logins from /var/log/wtmp and tries to detect the user pattern of usage 
 login to the server. If runs on multiple servers information will be merged.  
+
+**HISTORY**
+
+[Oct 19, 2020] dormant_user_stats was posted. The utility lists all users who were inactive for the specified number of days (default is 365). Calculates I-nodes usage too.
+Use dormant_user_stats -h for more information 
