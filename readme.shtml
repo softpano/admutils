@@ -1,0 +1,131 @@
+<html>
+
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=windows-1252">
+<title>Softpanorama collection of potentially useful sysadmin utilities</title>
+</head>
+<style>
+body {Background-color: #FFFFFF link: #0000CC vlink: #660066} 
+h1  { font-family: arial; text-align: Center; color: #CC0000 }
+h2  { font-family: arial; text-align: Center; color: #0000CC }
+h3  { font-family: arial; text-align: Center }
+h4  { font-family: Arial;  color: #006400}
+h5  { font-family: Arial;  color: #333300; font-style: italic}
+h6  { font-family: Arial; font-size: 10pt; font-style: bold}
+em  { font-style: italic; font-weight: bold; color: #FF0000}
+cite { font-style: italic; font-weight: bold; color: blue }
+a  {color: #0000FF;}
+
+td {font-family:arial,helvetica,sans-serif; font-size:10pt;}
+
+p.petit { font-family: arial; font-size: smaller }
+table.swb    {Background-color: cyan}
+td.swb       { border-right-style: solid; border-bottom-style: solid }
+table.nb    {Background-color: #ffffcc}
+tr.nb       { text-align: Center; font-weight: bold }
+td.nb        { border-style: solid }
+kbd {font-family: Fixedsys; font-size: 12pt; color: #0000FF;}
+tt {font-family: Fixedsys; font-size: 12pt; color: #0000FF;}
+code {font-family: Fixedsys; font-size: 12pt; color: #0000FF;}
+pre {font-family: Fixedsys; color: #0000FF; font-size: 12pt; margin: 1em 40px; }
+pre.code {font-family: Fixedsys; color: #0000FF; margin: 1em 40px;}
+blockquote {font-size: 10pt; font-family: arial; background: #F9F9F9}
+</style>
+<body>
+
+<h1>Softpanorama collection of potentially useful sysadmin utilities</h1>
+
+<p>Currently we plan to include the following written by me over the years utilities (this plan subject to change without notice). I 
+wrote them exclusively for myself and my needs but now after seeing several Linux/Unix sysadmin related repositories on GitHub I 
+realized that other people might benefit from the provided functionality too. </p>
+
+<p>Of course this requires time and that means that it might or might not happen. In any case it will not happen soon.&nbsp; I 
+already published on GitHub three utilities from my collection (<a itemprop="name codeRepository" href="https://github.com/softpano/neatperl">neatperl</a>, <a href="https://github.com/softpano/neatbash">
+neatbash</a> and <a href="https://github.com/softpano/saferm">saferm</a> ) a while ago but they did not generated any interest. </p>
+
+   <p>In any case if some 
+interest would be demonstrated here it will happen sooner. If not, later or never. In this sense<tt> dormant_user_stats </tt>is a 
+trying ball. </p>
+<p>Again, those utilities exists, were used by me for many years, but for publishing need polishing, which requires quite a lot of time.
+<p>I recently spend 12 hours on "finishing touches for such a simple utility as <tt>dormant_user_stats</tt> ;-). 
+
+<h3>The list of utilities I plan to publish</h3>
+<ol>
+
+   <li><b>[Published] <tt></b> <a itemprop="name codeRepository" href="https://github.com/softpano/neatperl"><tt>neatperl</tt></tt></a> -- simple, 
+   limited but pretty safe prettyprinter for Perl </li>
+
+   <li><b>[Published]</b> <tt> <a href="https://github.com/softpano/neatbash"><tt>neatbash</tt></a> </tt>-- simple, limited but safe prettyprinter for bash</li>
+
+   <li><b>[Published]</b> <a href="https://github.com/softpano/saferm"><tt>saferm</tt></a> -- Wrapper for rm that helps to prevent accidental 
+   deletion of vital files<li>
+   
+   <p><b>[Published] </b><tt>dormant_user_stats</tt>&nbsp;-- list users who were inactive for the specified number of days (default is 365). Calculates 
+   I-nodes usage too.</li>
+
+   <li><tt>etcdiff</tt>&nbsp;-- Creates tar file and displays files changes since previous invocations and differences. Can be used as a 
+   stage to GIT or for the control of actions of multiple sysadmins with the utility etcpolice.</li>
+
+   <li><tt>xrsync</tt>&nbsp;-- rsync using multiple connections. Files are sorted into piles and each pile transmitted vi own TCP 
+   connection. useful for transmitted over WAN lines with high latency</li>
+
+   <li><tt>usersync</tt>&nbsp;-- sync users and groups above certain UID and GID thresholds with the selected remove server (files should 
+   be assessable via ssh) if not /tmp/name_of_remote server directory should contain them</li>
+
+   <li><tt>mkuser</tt>&nbsp;-- create the same user on multiple servers. Written for small HPC clusters.</li>
+
+   <li><tt>dir2tar</tt>&nbsp;-- compresses the directory replacing all files in it with the archive and creating manifest and md5 
+   checksum. Uses pbzip2 archiver by default.</li>
+
+   <li><tt>reboot_manager</tt>&nbsp;-- reboots server once a month or quarter (period if selectable) if the server is inactive as shown 
+   by uptime</li>
+
+   <li><tt>emerergency_shutdown</tt>&nbsp;-- Currently works with Dell DRAC only, which should be configured for passwordless ssh login 
+   from the server that runs this utility. Detects that a disk in RAID 5 array failed it shut down the server.</li>
+
+   <li><tt>heartbeatmon</tt>&nbsp;-- monitoring multiple servers via heartbeat on common NFS or GPFS filesystem</li>
+
+   <li><tt>fspace_mon</tt>&nbsp;-- provides three level of alerts for free space with the ability to specify an action on the last level 
+   (for example shutdown of the server or block of user logins)</li>
+
+   <li><tt>intelliping</tt>&nbsp;-- ping all servers from the list containing both DRAC/ILO addresses and main interface IP (pinging 
+   separately DRAC/ILO and main interface) and informs if power was restored, or the server rebooted with DRAC/ILO on but main 
+   interface is not available or vise versa</li>
+
+   <li><tt>inform_recent_users</tt>&nbsp;-- allow sending message only to users who login to the server for the given period</li>
+
+   <li><tt>sgc</tt>&nbsp;-- sign git change -- add name of sysadmin to the git record even if he works as root.</li>
+
+   <li><tt>rootpolice</tt>&nbsp;-- verifies that all changes in /etc are all documented in git. Useful if mutile sysadmin exists for the 
+   server.</li>
+
+   <li><tt>useractivity</tt>&nbsp;-- collects statistics including IPs of user logins from /var/log/wtmp and tries to detect the user 
+   pattern of usage login to the server. If runs on multiple servers information will be merged.</li>
+</ol>
+
+<hr>
+<hr>
+<h2><a name="News">Old News</a> ;-) </h2>
+
+<h4>[Oct 19, 2020]&nbsp;The utility <font color="#0000FF">dormant_user_stats</font>&nbsp;was posted. </h4>
+<blockquote>
+
+   <p>The utility lists all users who were inactive for the specified 
+number of days (default is 365). Calculates I-nodes usage too. Use dormant_user_stats -h for more information</p>
+</blockquote>
+<h2><a name="Recommended_Links">Recommended Links</a></h2>
+<ul>
+
+   <li><a href="../admin_horror_stories.shtml">Sysadmin Horror Stories</a></li>
+
+   <li><a href="../index.shtml">Enterprise Unix Administration</a></li>
+
+   <li><a href="../parallel_command_execution.shtml">Parallel command execution</a></li>
+
+   <li><a href="../system_monitoring.shtml">Unix System Monitoring</a></li>
+
+   <li><a href="../unix_conf_management.shtml">Unix Configuration Management Tools</a></li>
+</ul>
+</body>
+
+</html>
