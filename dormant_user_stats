@@ -1,0 +1,568 @@
+#!/usr/bin/perl
+#:: dormant_users_stats -- filesystem free space monitor
+#:: Nikolai Bezroukov, 2016-2020.  Perl Artistic license
+#::
+#:: --- INVOCATION
+#::
+#::   dormant_users_stats [options] [user directory]
+#::
+#::   The utility calculates statistics for dormant users -- users inactive for specified period (default is 365 days)
+#::   Can be used for similar large trees, for example tree with genomes FASTA files and results of their processing, etc.
+#::   On large directory trees with branches of several terabytes and millions of file can take 30 min or more.
+#::   The utility generally requires root privileges to run, but can used from a user account if all files in the tree are
+#::   accessible from this account.
+#::
+#::--- OPTIONS
+#::
+#::    -v -- display version
+#::    -h -- this help
+#::    -i -- inactivity period (default is 365)
+#::    -s -- soft the resulting tag
+#::       i - by inodes
+#::       s - by size (default);
+#::    -b -- location of the home directory tree, or the root of any other similar tree (default /home)
+#::    -m -- the email address to mail the report. Three variant are possible
+#::          1. if this looks like a valid email address it will be used (for example -m joe.admin@firma.com )
+#::          2. in value does not contain @ but file with this name exists in root, we assume that this file
+#::              contains a email address and it will extracted and used.
+#::              For example is you specified option -m admin and the file /root/admin exists.
+#::          3. if no value is provided, of it specified file does not exist, but file /root/primary_sysadmin exists
+#::             the address is retrieved from this file ( for example -m or -m root and file /root/root does not exists)
+#::    -l -- the location of the directory with log files. Retention period for logs now is 256 days.
+#::          For example -l /var/opt/Dormant_users_stats
+#::
+#::    -d -- type of testing
+#::             0 -- Production run
+#::             1 -- Testing with full functionality and additional diagnostic output.
+#::             2 -- Debugging with the possibility to stop at the user dir defined by the $test_user variable
+#::
+#::--- NOTE: Default location of the logs is: /tmp/Dormant_users_stats
+
+#
+#--- Development History
+#
+# Ver      Date        Who        Modification
+# ====  ==========  ========  ==============================================================
+# 0.10  2016/05/16  BEZROUN   Initial implementation
+# 0.20  2017/01/25  BEZROUN   The root of the directory tree processed now can be changed with option -b (BASE)
+# 0.30  2017/12/01  BEZROUN   Statistics improved, summary added
+# 0.40  2018/05/01  BEZROUN   Error message routine simplified.
+# 0.50  2019/07/17  BEZROUN   Open -p (inactivity period) added
+# 0.60  2019/12/01  BEZROUN   Open -m added to mail report to specified address ( default is the content of /root/primary_admin )
+# 1.00  2020/09/28  BEZROUN   Stat table competely reorganized. Much of the code rewritten.
+# 1.10  2020/10/06  BEZROUN   Sorting by inodes added (via option -s i
+# 1.20  2020/10/07  BEZROUN   Values are not rounded to two digits after dec point and are pprovide in "human freindly " format.
+# 1.30  2020/10/14  BEZROUN   Width of "user name" field was made flexible
+# 1.31  2020/10/19  BEZROUN   Nasty bug with flexible width implementaion which screwed sortiong was fixed.
+# 1.40  2020/10/20  BEZROUN   Help screen improved
+# 1.50  2020/10/21  BEZROUN   Added the ability specify the location of the directory with log files via -l option
+# 1.60  2020/10/22  BEZROUN   Added the ability to block writing to log by specified the secod digit 0 in verbosity (like -v 30)
+# 1.61  2020/10/23  BEZROUN   But with impmentation of softing by inode fixed
+# 1.70  2020/10/24  BEZROUN   getopt replaced by the custom version, which allows options with parameters to be specified without them (1 is assumed in those case) 
+# 1.80  2020/10/25  BEZROUN   Added sorting order to the tile of the table 
+#= START ========================================================================================================================
+use v5.0.1;
+use feature qw(say state);
+use warnings;
+use strict 'subs';
+#use Getopt::Std; # Replacesd with custom as it contains a bug, which does not allow to specifiy an option that should have a paramter without a parameter, 
+                  # unless this is the last option. That's a shame.
+
+   $VERSION='1.80';
+   $SCRIPT_NAME='dormant_users_stats';
+   $debug=0;
+   $DB::single = 0;
+#
+# Options
+#
+   $test_user='';
+   $sort_order='s';
+   $INACTIVITY_PERIOD=365; # for Tarrytown 365 day
+#
+# Log control
+#
+   $verbosity=3; # level of messages on console 3 - all messages 2 -E,S,T 1 - S,T; 0 -- T ( the formula is severity>=3-verbosity )
+   $write_to_log=0;
+   $msglevel2=1;
+   $top_severity=0;
+   @ercounter=(0,0,0,0);
+   $LOG_RETENTION_PERIOD=365;
+      unless ($DATA_DIR) {
+      $DATA_DIR='/tmp/'.ucfirst($SCRIPT_NAME);
+   }
+#
+# Current time
+#
+   $compression_ratio=5; # bz 4
+   chomp($CURRENT_TIMESTAMP=`date +"%y/%m/%d"`);
+   @d=split(qr(/),$CURRENT_TIMESTAMP);
+   $CURRENT_TIMESTAMP=$d[0]*365+$d[1]*30+$d[2];
+#
+# Databases
+#
+   %scale=('T'=>1_000_000_000_000,'G'=>1_000_000_000,'M'=>1_000_000,'K'=>1_000,'1'=>1);
+   %mon2mm=('jan'=>1,'feb'=>2,'mar'=>3,'apr'=>4,'may'=>5,'jun'=>6,'jul'=>7,'aug'=>8,'sep'=>9,'oct'=>10,'nov'=>11,'dec'=>12);
+
+
+#
+# Let't determin default BASE directory
+#
+   $HOSTNAME=`hostname -s`; chomp $HOSTNAME;
+   if( $HOSTNAME=~/hpc/ ){
+      $BASE='/gpfs/backup/users/home';
+   }elsif($HOSTNAME=~/lusytpmain/) {
+      $BASE='/L2/users';
+   }elsif($HOSTNAME=~/twz/) {
+      $BASE='/Apps/users';
+   }else{
+      $BASE='/home'; # default
+   }
+
+#
+# Default config location and thresholds
+#
+
+   getopts("hd:v:i:b:m:l:s:",\%options);
+   if ( exists($options{'d'}) ) {
+      if ($options{'d'} =~/\d+/ ) {
+         $debug=substr($options{'d'},0,1);
+      } else {
+         die("Debug parameter should be a number");
+      }
+   }
+   if ( exists($options{'v'}) ) {
+      if (length($options{'v'})>=0) {
+         $verbosity=substr($options{'v'},0,1);
+         if(length($options{'v'})==2 && substr($options{'v'},1,1) eq '0' ){
+           $msglevel2=0; #permament block of writing to log
+         }
+      }
+   }
+   if ( exists($options{'h'}) ) {
+      helpme();
+      exit;
+   }
+
+   if ( exists($options{'i'}) ) {
+      if ( exists $options{'i'} ) {
+         $INACTIVITY_PERIOD=$options{'i'};
+         push(@messages_buffer,"Inactivity period used is: $INACTIVITY_PERIOD days");
+      }
+   }
+
+   if ( exists($options{'b'}) ) {
+      if ( exists $options{'f'} ) {
+         $BASE=$options{'b'}; # filesystem pattern for default options
+         die("Can't cd to to the directory $BASE specified as option -b because this is not a directory") unless ( -d $BASE);
+         chdir($BASE)
+      }
+   }
+
+   if( exists($options{'m'}) ){
+      # three cases are possible: this is a valid email address this is a file or /root/primary_syadmin exists
+      if ( index($options{'m'},'@')==-1 ){
+         if( -f '/root/'.$options{'m'} ){
+           ($mail_address, undef)=split(/:/,`cat $options{'m'}`);
+         }elsif( -f '/root/primary_admin' ){
+           ($mail_address, undef)=split(/:/,`cat /root/primary_admin`);
+         }else{
+            push(@messages_buffer,"Incorrect value of the option -m: $options{'m'}");
+         }
+      }else{
+         $mail_address=$options{'m'};
+      }
+      chomp($mail_address);
+      push(@messages_buffer,"Report will be mailed to $mail_address");
+   }
+
+   if ( exists($options{'s'}) ) {
+      if ( exists $options{'s'} ) {
+         $sort_order=$options{'s'}; # we now support two sorting orders -- Oct 14, 2020 --NNB
+      }
+   }
+
+   if ( exists($options{'l'}) ) {
+      # SYSLOG
+      $DATA_DIR=$options{'l'};
+      $options{'d'}="Log directory: $DATA_DIR\n";
+   }
+   push(@messages_buffer,"For list of options run: $SCRIPT_NAME -h . Log will be written to directory $DATA_DIR");
+#
+#  Create DATA_DIR directory
+#
+
+   unless( -d $DATA_DIR) {
+      mkdir_path($DATA_DIR);
+   }
+
+   banner(@messages_buffer); #  Open Logs and prin the banner, if $sgelevel1 is positive
+   $write_to_log=$msglevel2; # LOG file is now open and we can decide whther to write to it or not (logfile can be set via option -l so we can't write to log before that)
+
+   if ($sort_order eq 's'){
+      logme('W',"Stat table is sorted by space consumed");
+   }else{
+      logme('W',"Stat table is sorted by i-nodes consumed");
+   }
+
+
+   unless( -d  $BASE ){
+     abend("$BASE is not a directory");
+   }
+   chdir($BASE);
+
+   $backup_list="$DATA_DIR/raw_dormant_users_stats.lst";
+   if( $debug && -f $backup_list ){
+      @raw_stats=`cat $backup_list`;
+   }else{
+       if($debug){
+          @raw_stats=`find .  -maxdepth 1 -type d -mtime +$INACTIVITY_PERIOD | tee $backup_list`;
+       }else{
+          @raw_stats=`find .  -maxdepth 1 -type d -mtime +$INACTIVITY_PERIOD | tee $backup_list`;
+       }
+   }
+
+   chomp($total_users=`find .  -maxdepth 1 -type d  | wc -l`);
+   $dormant_users_count=0;
+   $max_inodes=$max_size=0;
+   $max_inodes_name=$max_size_name='';
+   $maxwidth=0; # width of the user name field
+
+   foreach $name ( @raw_stats ) {
+      chomp($name);
+      next if length($name)<3;
+      $name=substr($name,2); # remove ./
+      chomp($last_login=`date -r $name +"%y/%m/%d"`);
+      $user_timestamp=0;
+      $last_shell_login='unknown';
+      if( $debug > 1 && $name eq $test_user ){
+          $DB::single = 1;
+      }
+      if( -r "$name/.bash_history" ){
+          chomp($last_shell_login=`date -r $name/.bash_history +"%y/%m/%d"`);
+          @d=split(qr(/),$last_login);
+          $user_timestamp=$d[0]*365+$d[1]*30+$d[2]
+       }else{
+          $line=`find $name -name '.bash_history' -ls `;
+          if( $line ){
+             @F=split(/\s+/,$line),
+             $last_shell_login=$F[-4].' '.$F[-3].' '.$F[-2];
+             $m=mon2mm($F[-4]);
+             $user_timestamp=$F[-2]*365+$m*30+$F[-1];
+          }
+       }
+       next if( $CURRENT_TIMESTAMP-$user_timestamp <365); # false positive.
+
+      $user_timestamp=0;
+      $last_x_login='unknown';
+      if( -r "$name/.Xauthority") {
+          chomp($last_x_login=`date -r $name/.Xauthority +"%y/%m/%d"`);
+          @d=split(qr(/),$last_x_login);
+          $user_timestamp=$d[0]*365+$d[1]*30+$d[2];
+          next if( $CURRENT_TIMESTAMP-$user_timestamp < 365 ); # false positive.
+      }
+
+      if ($debug) { say "Processing user: $name  $last_shell_login $last_x_login" };
+      chomp($inodes=`find $name | wc -l`);
+      if($inodes>$max_inodes ){
+         $max_inodes=$inodes;
+         $max_inodes_name=$name;
+      }
+      #
+      # Calculate size of the directory
+      #
+      $line=`du -sk $name`;
+      ($size,undef)=split(/\s+/,$line);
+      if( $size>$max_size ){
+         $max_size=$size;
+         $max_size_name=$name;
+      }
+      $total_inodes += $inodes;
+      $total_size += $size;
+      ($human_size,$size_multiplier)=convert2human($size,'K',2);
+      ($human_inodes,$inodes_multiplier)=convert2human($inodes,'1',2);
+      $maxwidth=length($name) if(length($name)>$maxwidth);
+      $uid[$dormant_users_count]=$name;
+      $report[$dormant_users_count]=sprintf(" | %8.2f%1s | %8.2f%1s | %12s | %12s | %12s",$human_size,$size_multiplier,$human_inodes,$inodes_multiplier,$last_login,$last_x_login,$last_shell_login);
+      if( $sort_order eq 'i' ){
+         $skeleton[$dormant_users_count]=sprintf("%016u ",$inodes).sprintf("%05u",$dormant_users_count);
+      }else{
+         $skeleton[$dormant_users_count]=sprintf("%016u ",$size).sprintf("%05u",$dormant_users_count);
+      }
+
+      ++$dormant_users_count;
+   } #: foreach mainloop
+
+   @skeleton=sort( {$b cmp $a} @skeleton); # reverse sort order
+ #
+ # Produce report header
+ #
+   $header="DORMANT USERS RESOURCE CONSUMPTION REPORT";
+   $filler=(128-length($header))/2;
+   out( "\n", (' ' x $filler).$header );
+
+#
+# Produce summary
+#
+   out("\nSUMMARY\n");
+   $saved_space=$total_size*(1-1/$compression_ratio);
+   ($human_size,$size_multiplier)=convert2human($total_size,'K',2);
+   ($human_inodes,$inodes_multiplier)=convert2human($total_inodes,'1',2);
+   $percentage=sprintf('%u', 100*($dormant_users_count/$total_users));
+   out("TOTAL SPACE CONSUMED BY DORMANT USERS:\t".sprintf('%.2f',$human_size).$size_multiplier);
+   out("TOTAL I-NODES CONSUMED:               \t".sprintf('%.2f',$human_inodes).$inodes_multiplier);
+   out(qq(\nOut of $total_users users there are $dormant_users_count ( or $percentage\% ) "dormant" users (inactive for $INACTIVITY_PERIOD days).));
+   #$test=convert2human($saved_space,'K',1,'%.2f');
+   out("\tNOTE: Those $dormant_users_count directories can be compressed by pbzip2 saving around ".convert2human($saved_space,'K',1,'%.2f').' of space and '.convert2human($total_inodes-$total_users,'1',1,'%.2f').' i-nodes' );
+   out("\t      Average compression ratio $compression_ratio for pbzip2 is assumed","\n");
+   logme('W',"Largest space is consumed by the dormant user $max_size_name (".convert2human($max_size,'K',1,'%.2f').')');
+   logme('W',"Largest number of i-nodes is consumed by the dormant user $max_inodes_name (".convert2human($max_inodes,'1',1,'%.2f').' inodes )');
+
+ #
+ # Renerate table title
+ #
+   $table_header='NO | '.sprintf('%'.$maxwidth.'s','User name').' |   Space   |  i-nodes  |Last home mod | Last X login | Last shell login  ';
+   $sortorder=($sort_order eq 'i')? 'I-NODES USAGE':'SIZE';
+   $title="STATISTICAL INFORMATION FOR DORMANT USERS RESOURCES USAGE SORTED BY $sortorder";
+   $filler=(length($table_header)-length($title))/2;
+   out("\n",(' ' x $filler)."STATISTICAL INFORMATION FOR DORMANT USERS RESOURCES USAGE SORTED BY $sortorder");
+   out('=' x length($table_header));
+   out( '  '.$table_header );
+   out('=' x length($table_header));
+#
+# Generate table body 
+# 
+   $maxwidth=length('User name') if $maxwidth<length('User name');
+   for( $i=0; $i<@report; $i++ ){
+      $k=substr($skeleton[$i],-5);
+      $line=$report[$k];
+      out(sprintf("%4u | ",$i).sprintf('%-'.$maxwidth.'s',$uid[$k]).$line);
+   }
+   out('=' x length($table_header));
+#
+# Email the report to the specified address, if nessesary
+#
+if( defined($mail_address) ){
+   if($mail_address =~/\w+.*@\w+.*\.\w+$/ ){
+      `mail -s "Dormant users resources consumption report using $INACTIVITY_PERIOD days of inactivity"  $mail_address < $LOG_FILE`;
+      logme('W',"Report emailed to $mail_address")
+   }else{
+      logme('E',"The address $mail_address is invalid");
+   }
+}
+
+exit (0);
+sub convert2human
+# 1 value
+# 2 multiplier
+# 3 -mode
+#    1 -- return single strin with sixe at the end,
+#    2 -  return the list of two values
+# 4 - format for conversion
+#
+{
+my $value=$_[0];
+my $value_multi=$_[1];
+my $mode=$_[2];
+my $multiple;
+     #numeric
+      if( exists($scale{$value_multi}) ){
+        $value*=$scale{$value_multi};
+      }else{
+        abend("Internal error in convert2human. $value_multi  is the wrong value for the second argument. Can be T,G,M.,K,1");
+      }
+      if( $value>=1_000_000_000_000 ){
+        $value=$value/1_000_000_000_000;
+        $multiple='T'
+      }elsif( $value>=1_000_000_000 ){
+        $value=$value/1_000_000_000;
+        $multiple='G';
+      }elsif($value>=1_000_000 ){
+        $value=$value/1_000_000;
+        $multiple='M';
+      }elsif($value>=1_000 ){
+        $value=$value/1_000;
+        $multiple='K';
+      }else{
+        $multiple='';
+      }
+     if( scalar(@_) > 3 ){
+        $value=sprintf($_[3],$value);
+     }
+     if( $mode==1 ){
+       return $value.$multiple;
+     }
+     return ($value,$multiple);
+}
+#========================== SP subs =========================== SP subs =====================================
+sub abend
+{
+my $lineno=$_[0];
+my $message=$_[1];
+   close SYSLOG;
+   warn "$lineno $message";
+   echo $lineno "$message" >> $LOG_FILE;
+   exit(255);
+} # abend
+
+#
+# Make directories for the package
+#
+sub mkdir_path
+{
+   foreach (@_) {
+      next if ( -e $_);
+      `mkdir -p $_`;
+   }
+}
+#
+# Message generator: Record message in log and STDIN (controlled by msglevel1 and msglevel2)
+# lineno, severity, message
+#
+# ARG1 lineno
+# Arg2 Error code (only first letter is used, subsequnt letter can contin assitional info)
+# Arg3 Test of the message
+sub logme
+{
+#our $top_severity; -- should be defined globally
+my $error_code=substr($_[0],0,1);
+my $message=$_[1];
+my ($package, $filename, $lineno) = caller;
+my $severity=index("WEST",$error_code);
+
+      $ercounter[$severity]++;
+      $message="\[$error_code$lineno\]  $message";
+
+#----------------- Error history -------------------------
+      if ( $severity > $top_severity) {
+         $top_severity=$severity;
+         $top_message = $message;
+      }
+#--------- Message printing and logging --------------
+      ($write_to_log) && say SYSLOG $message;
+      if($severity>=2-$verbosity ){
+         # msglevel2 defines writing to STDIN. 3 means Errors (Severe and terminal messages always whould be printed)
+         say $message;
+      }
+
+} #logme
+#
+# banner. Opens SYSLOG file
+#
+sub banner
+{
+my $timestamp=`date "+%y/%m/%d %H:%M"`;
+   chomp $timestamp;
+my $date_of_last_mod=`date -r $0 "+%y/%m/%d %H:%M"`;
+    chomp $date_of_last_mod;
+my $mybanner=uc($SCRIPT_NAME).": version $VERSION ( of $date_of_last_mod )  Date: $timestamp";
+my $cur_date=`date "+%y%m%d"`;
+    chomp $cur_date;
+my $day=substr($timestamp,6,2);
+   if( $day==1 ){
+      #Note: in debugging script home dir is your home dir and the last thing you want is to clean it ;-)
+      `/usr/bin/find $DATA_DIR -name '*.log' -type f -mtime +$LOG_RETENTION_PERIOD -delete`; # monthly cleanup
+   }
+my $debug_suffix=($debug) ? "_debug" : '' ;
+   $LOG_FILE="$DATA_DIR/$SCRIPT_NAME.$cur_date.log";
+   open(SYSLOG,'>',$LOG_FILE) || abend(__LINE__,"Fatal error: unable to open $LOG_FILE for writing");
+   out("\n",$mybanner);
+   if( @_ ){
+     for( my $i=0; $i<@_; $i++){
+        say "\t".$_[$i];
+     }
+   }
+}
+#
+# Summary of diagnist messages like in IBM compilers
+#
+sub summary {
+   my $i;
+return if ($top_severity<=3);
+   logme(0,' ', "Messages summary:\n");
+   for ( $i=length('WEST'); $i>0; $i-- ) {
+      next if ($ercounter[$i] == 0 );
+      out(substr('WEST',$i,1).": ".$ercounter[$i]."\n");
+   }
+   out("The most severe error: $top_message");
+} # summary
+sub out
+{
+my $i;
+   if(scalar(@_)==0){
+     say "\n";
+     say SYSLOG "\n" if( $write_to_log );
+     return;
+   }  
+   for( $i=0; $i<@_; $i++ ){
+     say $_[$i];
+     say SYSLOG $_[$i] if( $write_to_log );
+   }
+}
+#
+# Read script and extract help from comments starting with #::
+#
+sub helpme
+{
+      open(SYSHELP,"<$0");
+      while($line=<SYSHELP>) {
+         if ( substr($line,0,3) eq "#::" ) {
+            print substr($line,3);
+         }
+      } # for
+      close SYSHELP;
+      exit;
+}
+sub getopts
+{
+my ($options_def,$options_hash)=@_;
+my ($first,$rest,$pos,$cur_opt);
+   while(@ARGV){
+      $cur_opt=$ARGV[0];
+      last if( substr($cur_opt,0,1) ne '-' );
+      if ($cur_opt eq '--'){
+          shift @ARGV;
+          last;
+      }
+      $first=substr($cur_opt,1,1);
+      $pos = index($options_def,$first);
+      if( $pos==-1) {
+         warn("Undefined option -$first skipped without processing\n");
+         shift(@ARGV);
+         next;
+      }
+      $rest=substr($cur_opt,2);
+      if( $pos<length($options_def)-1 && substr($options_def,$pos+1,1) eq ':' ){
+         # option with parameters
+         if( $rest eq ''){
+           shift(@ARGV); # get the value of option
+           unless( @ARGV ){
+              warn("End of line reached for option -$first which requires argument\n");
+              $$options_hash{$first}='';
+              last;
+           }
+           if ( $ARGV[0] =~/^-/ ) {
+               warn("Option -$first requires argument\n");
+               $$options_hash{$first} = '';
+           }else{
+               $$options_hash{$first}=$ARGV[0];
+               shift(@ARGV); # get next chunk
+           }
+         } else {
+            #value is concatenated with option like -ddd
+            if( ($first x length($rest)) eq $rest ){
+               $$options_hash{$first} = length($rest)+1;
+            }else{
+               $$options_hash{$first}=$rest;
+            }
+            shift(@ARGV);
+         }
+      }else {
+         $$options_hash{$first} = 1; # set the option
+         if ($rest eq '') {
+            shift(@ARGV);
+         } else {
+            $ARGV[0] = "-$rest"; # there can be other options without arguments after the first
+         }
+      }
+   }
+}
