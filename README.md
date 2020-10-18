@@ -1,6 +1,6 @@
 # Preannoncement of admutils -- softpanorama collection of potentially useful utilities
 
-Currently we plan to include the follwoign (this plan subject to change without notice):
+Currently we plan to include the following written by me over the years utilities (this plan subject to change without notice):
 
 1. etcdiff -- Creates tar file and  displays files changes since previous invocations and differences. Can be used as a stage to GIT or for the control of actions of multiple sysadmins with the utlity etcpolice.
 1. dormant_user_stats -- list users who were inactiove for the specified number of days (defualt is 365). Calculates i-nodes usage too. 
