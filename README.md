@@ -1,8 +1,6 @@
-<center>
-<h1>
-Preannouncement of admutils
-</h1>  
-</center>
+#                              Preannouncement of admutils
+
+
   
 # Softpanorama collection of potentially useful sysadmin utilities
 
