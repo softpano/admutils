@@ -4,9 +4,9 @@
 
 This project is about publishing of a set of written by me over the years sysadmin utilities (this plan subject to change without notice).
 
-**NOTE**: This page is not maintained often as I prefer HTML to Markup. See html version of this page [readme.shtml](http://softpanorama.org/Admin/Sp_admin_utils/index.shtml) for more recent and complete information.
+**NOTE**: This page is not maintained often, as I prefer HTML to Markup. See html version of this page at http://softpanorama.org/Admin/Sp_admin_utils/index.shtml for more recent and complete information.
 
-## HISTORY
+## History
 
 **Nov 2, 2020** *usersync utility* was posted. It syncronizes (one way) users and groups within given interval of UID (min and max)  with the directory or selected remote server (in the latter case files should be assessable via ssh.) ) Useful for provisioning multiple servers that use traditional authentication, and not  LDAP and for synchronizing user accounts between multiple versions on Linux .  Also can be used for "normalizing" servers after acquisition of another company, changing on the fly UID and GID on multiple servers, etc.  Can also be used for provisioning computational nodes on small and medium HPC clusters that use traditional authentication instead of DHCP.  
 
