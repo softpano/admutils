@@ -6,18 +6,19 @@
 #::
 #::   dormant_users_stats [options] [user directory]
 #::
-#::   The utility calculates statistics for dormant users -- users inactive for specified period (default is 365 days)
-#::   Can be used for similar large trees, for example tree with genomes FASTA files and results of their processing, etc.
+#::   The utility analyses the tree of home directories and calculates statistics for dormant users -- users inactive for specified period (default is 365 days)
+#::   Instead of home directories can be used for and large similar trees, for example tree with genomes FASTA files and results of their processing, etc.
 #::   On large directory trees with branches of several terabytes and millions of file can take 30 min or more.
 #::   The utility generally requires root privileges to run, but can used from a user account if all files in the tree are
 #::   accessible from this account.
 #::
 #::--- OPTIONS
 #::
-#::    -v -- display version
+#::    -v -- verbosity (0-3). Can be specified as two digits with the second digit adding what messages are written tot he log 
+#::          Max verbosity 3 means the warning, error and severe errors will be displayed. -v 2 cuts warnings, -v 1 warning and errors
 #::    -h -- this help
-#::    -i -- inactivity period (default is 365)
-#::    -s -- soft the resulting tag
+#::    -i -- inactivity period after which the user is considered to be "dormant" (the default is 365)
+#::    -s -- sort the specified attribute
 #::       i - by inodes
 #::       s - by size (default);
 #::    -b -- location of the home directory tree, or the root of any other similar tree (default /home)
@@ -28,13 +29,23 @@
 #::              For example is you specified option -m admin and the file /root/admin exists.
 #::          3. if no value is provided, of it specified file does not exist, but file /root/primary_sysadmin exists
 #::             the address is retrieved from this file ( for example -m or -m root and file /root/root does not exists)
-#::    -l -- the location of the directory with log files. Retention period for logs now is 256 days.
+#::    -l -- the location of the directory with log files. The default retention period for logs is 365 days.
 #::          For example -l /var/opt/Dormant_users_stats
-#::
+#::          or
+#::             -l '/var/opt/Dormant_users_stats:30' -- changes the default log retention period
+#::    -x  -- generates the list of dormant users (dormant_users.lst) in the work directory 
+#::          and the script with action to be performed on each user (dormant_users_action.sh), adding user to the end. 
+#::          Can be used, for example, for locking all dormant users  ( -c 'passwd -l' )
+#::          Or for compression of the directories ( -x dir2zip ) to save space. 
+#::          More complex actions fro which adding user tot he end of the name is not suitable can be performed 
+#::          with the list of dormant users, for example:
+#::               cat dormant_users.list | xargs -l 1 command 
 #::    -d -- type of testing
 #::             0 -- Production run
 #::             1 -- Testing with full functionality and additional diagnostic output.
 #::             2 -- Debugging with the possibility to stop at the user dir defined by the $test_user variable
+#::             For example, -d '2:frankj'
+#::--- NOTE: Default location of the logs is: /tmp/Dormant_users_stats
 #::
 #::--- NOTE: Default location of the logs is: /tmp/Dormant_users_stats
 
@@ -58,17 +69,20 @@
 # 1.50  2020/10/21  BEZROUN   Added the ability specify the location of the directory with log files via -l option
 # 1.60  2020/10/22  BEZROUN   Added the ability to block writing to log by specified the secod digit 0 in verbosity (like -v 30)
 # 1.61  2020/10/23  BEZROUN   But with impmentation of softing by inode fixed
-# 1.70  2020/10/24  BEZROUN   getopt replaced by the custom version, which allows options with parameters to be specified without them (1 is assumed in those case) 
-# 1.80  2020/10/25  BEZROUN   Added sorting order to the tile of the table 
+# 1.70  2020/10/24  BEZROUN   getopt replaced by the custom, better version, which allows repretition of letters 
+#                             and parameters defined with value to be specified without any value ( -v means -v 1 ) 
+# 1.80  2020/10/25  BEZROUN   Added sorting order to the title of the table 
+# 2.00  2020/11/02  BEZROUN   Added option -x -- execute arbitraty command for each dormant user(lock or delete account) 
 #= START ========================================================================================================================
 use v5.0.1;
 use feature qw(say state);
 use warnings;
 use strict 'subs';
-#use Getopt::Std; # Replacesd with custom as it contains a bug, which does not allow to specifiy an option that should have a paramter without a parameter, 
-                  # unless this is the last option. That's a shame.
+#use Getopt::Std; # Replaced with custom as it contains a bug, which does not allow to specifiy an option that should have a parameter, 
+                  # unless this is the last option. That's a shame. Also allows repretition of letters instead of numberic value
+                  # -vvv is equvament to -v 3 
 
-   $VERSION='1.80';
+   $VERSION='2.00';
    $SCRIPT_NAME='dormant_users_stats';
    $debug=0;
    $DB::single = 0;
@@ -77,7 +91,8 @@ use strict 'subs';
 #
    $test_user='';
    $sort_order='s';
-   $INACTIVITY_PERIOD=365; # for Tarrytown 365 day
+   $INACTIVITY_PERIOD=365; # default log keeping period (one year)
+   $COMMAND=''; # command to generate for each dormat user (the generated script written to the work directory)
 #
 # Log control
 #
@@ -87,8 +102,8 @@ use strict 'subs';
    $top_severity=0;
    @ercounter=(0,0,0,0);
    $LOG_RETENTION_PERIOD=365;
-      unless ($DATA_DIR) {
-      $DATA_DIR='/tmp/'.ucfirst($SCRIPT_NAME);
+      unless ($WORKDIR) {
+      $WORKDIR='/tmp/'.ucfirst($SCRIPT_NAME);
    }
 #
 # Current time
@@ -105,7 +120,7 @@ use strict 'subs';
 
 
 #
-# Let't determin default BASE directory
+# Let't determine the default BASE directory in which we need to scan home directories 
 #
    $HOSTNAME=`hostname -s`; chomp $HOSTNAME;
    if( $HOSTNAME=~/hpc/ ){
@@ -122,26 +137,37 @@ use strict 'subs';
 # Default config location and thresholds
 #
 
-   getopts("hd:v:i:b:m:l:s:",\%options);
+   getopts("hd:v:i:b:m:l:s:x:",\%options);
+   helpme() if exists($options{'h'};
+   if ( exists($options{'l'}) ) {
+      # SYSLOG
+      $WORKDIR=$options{'l'};
+      if( $WORRDIR=~/^(.+)\:(\d+)/ ){
+          $WORKDIR=$options{'l'}=$1;
+          $LOG_RETENTION_PERIOD=$2;
+      }    
+      $options{'d'}="Working and log directory is set to: $WORKDIR\n";
+   }
    if ( exists($options{'d'}) ) {
-      if ($options{'d'} =~/\d+/ ) {
-         $debug=substr($options{'d'},0,1);
-      } else {
-         die("Debug parameter should be a number");
-      }
+      if ($options{'d'} =~/^(\d)\:(.*)$/ ) {
+         $debug=$1;
+         $test_user=$2;
+      } elsif($options{'d')=~/\d/){
+         $debug=$options{'d'};
+      }else{
+         die("Wrong value of option -d ($options{'d'}).Should be iether single digit of digit and test user like -d '2:frankj'\n\n");
+      }   
    }
    if ( exists($options{'v'}) ) {
-      if (length($options{'v'})>=0) {
+      $verbosity=$options{'v'};
+      if (length($options{'v'})=2) {
          $verbosity=substr($options{'v'},0,1);
          if(length($options{'v'})==2 && substr($options{'v'},1,1) eq '0' ){
            $msglevel2=0; #permament block of writing to log
          }
       }
    }
-   if ( exists($options{'h'}) ) {
-      helpme();
-      exit;
-   }
+   
 
    if ( exists($options{'i'}) ) {
       if ( exists $options{'i'} ) {
@@ -181,21 +207,19 @@ use strict 'subs';
       }
    }
 
-   if ( exists($options{'l'}) ) {
-      # SYSLOG
-      $DATA_DIR=$options{'l'};
-      $options{'d'}="Log directory: $DATA_DIR\n";
+   if ( exists($options{'x'}) ) {
+      $COMMAND=$options{'x'};
    }
-   push(@messages_buffer,"For list of options run: $SCRIPT_NAME -h . Log will be written to directory $DATA_DIR");
+   push(@messages_buffer,"For list of options run: $SCRIPT_NAME -h . Log will be written to directory $WORKDIR");
 #
 #  Create DATA_DIR directory
 #
 
-   unless( -d $DATA_DIR) {
-      mkdir_path($DATA_DIR);
+   unless( -d $WORKDIR) {
+      mkdir_path($WORKDIR);
    }
 
-   banner(@messages_buffer); #  Open Logs and prin the banner, if $sgelevel1 is positive
+   banner(@messages_buffer); #  Open Logs and print the banner, if $msglevel1 is positive
    $write_to_log=$msglevel2; # LOG file is now open and we can decide whther to write to it or not (logfile can be set via option -l so we can't write to log before that)
 
    if ($sort_order eq 's'){
@@ -210,7 +234,7 @@ use strict 'subs';
    }
    chdir($BASE);
 
-   $backup_list="$DATA_DIR/raw_dormant_users_stats.lst";
+   $backup_list="$WORKDIR/raw_dormant_users_stats.lst";
    if( $debug && -f $backup_list ){
       @raw_stats=`cat $backup_list`;
    }else{
@@ -341,14 +365,34 @@ use strict 'subs';
 #
 # Email the report to the specified address, if nessesary
 #
-if( defined($mail_address) ){
-   if($mail_address =~/\w+.*@\w+.*\.\w+$/ ){
-      `mail -s "Dormant users resources consumption report using $INACTIVITY_PERIOD days of inactivity"  $mail_address < $LOG_FILE`;
-      logme('W',"Report emailed to $mail_address")
-   }else{
-      logme('E',"The address $mail_address is invalid");
+   if( defined($mail_address) ){
+      if($mail_address =~/\w+.*@\w+.*\.\w+$/ ){
+         `mail -s "Dormant users resources consumption report using $INACTIVITY_PERIOD days of inactivity"  $mail_address < $LOG_FILE`;
+         logme('W',"Report emailed to $mail_address")
+      }else{
+         logme('E',"The address $mail_address is invalid");
+      }
    }
-}
+#
+# generate command for each doemant user
+#
+   if( $COMMAND ){
+      logme('W',"List of dormat users written to $WORKDIR/dormant_user.lst");
+      open(SYSOUT,'>',"$WORKDIR/dormant_user.lst") || abend(can wrting file dormant_user.lst to workdir);
+      for( my $i=0; $i<@uid; $i++ ){
+         say SYSOUT $uid[$i];
+      } 
+      close SYSOUT;
+      logme('W',"List of specified operation $COMMAND on each of dormat users written to $WORKDIR/dormant_user_action.sh");
+      open(SYSOUT,'>',"$WORKDIR/dormant_user_action.sh") || abend(can wrting file dormant_user_action.sh to workdir);
+      for( my $i=0; $i<@uid; $i++ ){
+         $name=$uid[$i];
+         out("$COMMAND $name\n");
+         print SYSOUT "$COMMAND $name\n";
+      }
+      chmod(0755,"$WORKDIR/dormant_user_action.sh");
+      close SYSOUT;
+   }   
 
 exit (0);
 sub convert2human
@@ -430,7 +474,7 @@ my ($package, $filename, $lineno) = caller;
 my $severity=index("WEST",$error_code);
 
       $ercounter[$severity]++;
-      $message="\[$error_code$lineno\]  $message";
+      $message='['.$error_code.$lineno.']: '.$message;
 
 #----------------- Error history -------------------------
       if ( $severity > $top_severity) {
@@ -460,10 +504,10 @@ my $cur_date=`date "+%y%m%d"`;
 my $day=substr($timestamp,6,2);
    if( $day==1 ){
       #Note: in debugging script home dir is your home dir and the last thing you want is to clean it ;-)
-      `/usr/bin/find $DATA_DIR -name '*.log' -type f -mtime +$LOG_RETENTION_PERIOD -delete`; # monthly cleanup
+      `/usr/bin/find $WORKDIR -name '*.log' -type f -mtime +$LOG_RETENTION_PERIOD -delete`; # monthly cleanup
    }
 my $debug_suffix=($debug) ? "_debug" : '' ;
-   $LOG_FILE="$DATA_DIR/$SCRIPT_NAME.$cur_date.log";
+   $LOG_FILE="$WORKDIR/$SCRIPT_NAME.$cur_date.log";
    open(SYSLOG,'>',$LOG_FILE) || abend(__LINE__,"Fatal error: unable to open $LOG_FILE for writing");
    out("\n",$mybanner);
    if( @_ ){
@@ -503,7 +547,7 @@ my $i;
 #
 sub helpme
 {
-      open(SYSHELP,"<$0");
+      open(SYSHELP,'<',$0);
       while($line=<SYSHELP>) {
          if ( substr($line,0,3) eq "#::" ) {
             print substr($line,3);

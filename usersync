@@ -1,0 +1,816 @@
+#!/usr/bin/perl
+#:: usersync -- Recreation or normalization of user accounts from a remote server or a specified directory
+#::
+#:: The utility usersync allow partial (one way) sychronizatiuon of a lice (defins by min and msx uid) of user accounts 
+#:: with the reference server or reference directory, generating appropriate commands for eliminating the differences
+#:: detected in passwd and group files
+#::
+#:: Copyright Nikolai Bezroukov, 2007-2020. Licensed under Artistic license
+#::
+#:: NOTE: this is a beta software; use at your own risk.
+#--------------- Development History -----------------------------------------------------
+#
+#++ Ver   Date         Who       Modification
+#++ ===   ========== ========  =========================================================
+#++ 0.10  2007/11/01 BEZROUN   Initial implementation
+#++ 0.11  2008/02/05 BEZROUN   oracle account is now created if dba specified as a role
+#++ 0.20  2009/12/15 BEZROUN   If on linux retuns a string if the id not found
+#++ 0.30  2009/12/15 BEZROUN   Incorrect filtering of roles fixed
+#++ 0.40  2011/04/08 BEZROUN   Default password is set up for new accounts
+#++ 0.50  2011/07/25 BEZROUN   Complete rewrite 
+#++ 0.51  2011/10/12 BEZROUN   Many bugs fixed. Tests on redhat for account creation 
+#++ 0.52  2011/11/08 BEZROUN   Tested on Suse. Several bugs fixed.  
+#++ 0.53  2011/11/22 BEZROUN   Errors in unifying groups fixed. Loggin inproved.
+#++ 0.60  2014/06/26 BEZROUN   Conversion to User Private Groups model 
+#++ 0.61  2014/06/27 BEZROUN   Normalization accounts into User Private Groups model is now fixed
+#++ 0.62  2014/11/19 BEZROUN   Ability to decompile record from refernce server
+#++ 0.63  2014/11/19 BEZROUN   option -m ($MIN_UID) was introduced
+#++ 0.64  2014/11/19 BEZROUN   Reference password and group file should be in reference directory under original names
+#++ 0.65  2014/11/19 BEZROUN   SSH dome add. Now the uitilioty oprates in two modes (ssh and reference directory). 
+#++ 0.66  2014/11/22 BEZROUN   Suroutines from softpano.pm changed to more modern version from neatperl
+#++ 0.68  2014/12/09 BEZROUN   Workdir now is created in user directory and assiged permission 700
+#++ 0.70  2020/10/30 BEZROUN   Total rewrite. Logic changed again. Polishing for publishing on GITHUB
+#
+#START ==============================================================================================================
+   use v5.10;
+   use warnings;
+   use strict 'subs';
+
+   $debug=0; # CONFIG-eligible 
+   $VERSION='0.71';
+   $SCRIPT_NAME='usersync';  
+   $DB::single=0;
+
+#
+# Defaults                          
+#
+   $OS=`uname`;
+   $MIN_UID=1000; # CONFIG-eligible -- skip all record with uid below this threshold.
+   $MAX_UID=999999999; # CONFIG-eligible -- skip all record with uid below this threshold.
+   $etc_passwd='/etc/passwd';
+   $etc_group='/etc/group';      
+   #$admgroup='wheel';
+   chomp($OS);
+   unless( $OS eq 'Linux' ){ 
+     die ("An unsupported OS: $OS\n");
+   }  
+   $useradd_command='/usr/sbin/useradd';
+   $usermod_command='/usr/sbin/usermod';
+   $groupadd_command='/usr/sbin/groupadd';
+   $groupmod_command='/usr/sbin/groupmod';               
+   $default_shell='/bin/bash';
+   $shell_overwrite=1;       
+   # $is_redhat=(index(`cat /etc/*release`,'Red Hat') > -1 ) ? 1 : 0;   
+ 
+#
+# Config file
+#
+   $HOME=$ENV{'HOME'};
+   @CONFIG_LOCATIONS=("$HOME/.config/$SCRIPT_NAME.conf", "$HOME/$SCRIPT_NAME.conf","/etc/$SCRIPT_NAME.conf");
+   for( $i=0; $i<@CONFIG_LOCATIONS; $i++ ){
+     next unless( -f $CONFIG_LOCATIONS[$i] );
+     get_config($CONFIG_LOCATIONS[$i]);
+     last;
+   }
+
+#
+# Initialization for logme
+#
+   @ermessage_db={}; # accumulates messages for each category (warning, errors and severe errors)
+   @ercounter=(0,0,0,0);
+   
+ #
+ # Working directory
+ #
+   $WORKDIR=$HOME.'/'.ucfirst($SCRIPT_NAME);  
+   $GENERATED_SCRIPT="$WORKDIR/generated_script.sh";  
+   mkdir($WORKDIR,700);
+   $LOG_DIR=$WORKDIR; # CONFIG-eligible
+#
+# Options
+#
+   logme('V',3,3); # initialize logme so that it can be used in options
+   getopts("c:d:v:hl:m:M:S:s:x",\%options);
+   if ( exists($options{'l'}) ) {
+      # SYSLOG
+      $LOG_DIR=$options{'l'};
+      if( $LOG_DIR=~/^(.+)\:(\d+)/ ){
+          $LOG_DIR=$options{'l'}=$1;
+          $LOG_RETENTION_PERIOD=$2;
+      }   
+      `mkdir -p -m 770 $LOG_DIR` unless ( -d "$LOG_DIR" );      
+   }
+     
+   banner(ucfirst($SCRIPT_NAME)." -- Syncronization of user accouns for classic Unix authentication files), Version $VERSION",$LOG_DIR,30);
+   standard_options(); 
+   out("The directory for generated commands: $WORKDIR")
+
+   # option P -- specify SSH parameters, including port
+   if(  exists  $options{'S'}  ){
+      $SSH='ssh '.$options{'S'};
+   }
+ 
+#
+# m -- minimum UID threshold
+#
+   if( exists($options{'m'}) ){
+      if( $options{'m'}>0 ){
+        $MIN_UID=$options{'m'}; 
+      }else{
+        die("Option m (MIN_UID) is not numeric\n");
+      }
+   }  
+
+#
+# m -- minimum UID threshold
+#
+   if( exists($options{'M'}) ){
+      if( $options{'M'}>0 ){
+        $MAX_UID=$options{'m'}; 
+      }else{
+        die("Option M (MAX_UID) is not numeric\n");
+      }
+   }     
+
+#
+#  x -- type of output. Generate or run commands
+#
+   if( exists($options{'x'}) ){
+      if( $VERSION<1 ){
+         logme('W',"The script is still in beta version. Option -x blocked. Commands will be generated and need to be inspected");
+      }else{    
+         $runme_flag=1;
+      }   
+   }
+#
+#  s -- replace shell in input
+#
+   if( exists($options{'s'}) ){
+      $default_shell=$options{'s'};
+      $shell_overwrite=1;
+   }
+
+   if( $debug>0 ){  
+      $runme_flag=0;
+      logme('V',3,3); # set verbosity1 and verbosity2. Verbosity is opposite to severity WEST -> TSEW 0 - T only; 1 - TS; 2 - TSE; 3 - TSEW;
+      logme('W',"Debugging mode $debug is used");    
+      autocommit("$ENV{'HOME'}/Archive",0); # sets script name and perform Self-CMS actions.
+   } 
+
+#
+# If the argument contain '.' and is directory this is a reference directory
+# Otherside it is assumented to be remote server dndname
+#
+   unless( scalar(@ARGV) ) { abend("Utility need an argument -- remote or local directory with authentication files to be serveed as reference");}
+   if( index($ARGV[0],'/')>-1 && -d $ARGV[0]){
+      $ref_source='dir';
+      $REFERENCE_DIR=$ARGV[0];       
+      out('The reference dir is: '.$REFERENCE_DIR);
+   }else{
+      $ref_source='ssh';
+      $REFERENCE_SERVER=$ARGV[0];
+      out("Reference site: $REFERENCE_SERVER\nSSH parameters: $SSH");
+   }  
+   
+#
+# Create local backup of files 
+#
+   mkdir("$WORKDIR/Local_backup",700);
+   `cp -p /etc/{passwd,shadow,group} $WORKDIR/Local_backup`;
+   
+   open(SYSOUT,'>',$GENERATED_SCRIPT) || abend("Can't open file $GENERATED_SCRIPT for writing");
+   if( $> ){
+      logme('W',"This utility is not running as root (effective UID is $> ). Execution of useradd and similar commands impossible");  
+      $runme_flag=0;
+   }   
+  #
+  # slurp local passwd file and create hash of each use element
+  #
+  open(SYSIN, '<',$etc_passwd) || abend("Can't  read $WORKDIR/$etc_passwd");
+  while (<SYSIN>){
+      chomp;
+      ($uname,undef,$uid,$gid,$c,$home,$shell)=split(/\:/,$_);
+       next if $uid<$MIN_UID;
+       next if ($uname eq 'nfsnobody');
+       $local_user{$uname}="$uid:$gid:$c:$home:$shell"; # create hash to use as referrnce for analizing the local auth files
+  }
+  close SYSIN;  
+          
+  # Get all groups
+  # $group_by_name{$g}=$gid;
+  # $group_by_gid{$gid}=$g;
+   open(SYSIN, '<',$etc_group);
+   while(<SYSIN>){
+      chomp;
+      ($g,undef,$gid,$membership)=split(/\:/,$_);
+      $group_by_name{$g}=$gid;
+      $group_by_gid{$gid}=$g;
+   }
+   close SYSIN;    
+
+# 
+# copy reference passwd and grop to Workdir/Reference
+#
+
+   mkdir("$WORKDIR/Reference",700);
+   if( $ref_source eq 'ssh'){
+      `scp $REFERENCE_SERVER:/etc/{passwd,group} $WORKDIR/Reference`;
+   }else{
+      `cp $REFERENCE_DIR/{passwd,group} $WORKDIR/Reference`;
+   } 
+#
+# Process reference group
+#
+   open (SYSIN, '<', "$WORKDIR/Reference/group");
+   while($line=<SYSIN>){
+     chomp($line);
+     next if substr($line,0,1) eq '#';  # skip comments
+     next unless($line);
+     ($g,undef,$gid,$membership)=split(/\:/,$line);
+     $reference_gid{$g}=$gid;
+     $reference_grname{$gid}=$g;
+     @members=split(/,/,$membership);
+     foreach $user ( @members ){
+        if( exists($belong_to_groups{$user}) ){
+           $belong_to_groups{$user}.=','.$g;
+        }else{
+           $belong_to_groups{$user}.=$g;
+        } 
+   }        
+      
+   } # while
+   close SYSIN;
+   
+   open (SYSIN, '<', "$WORKDIR/Reference/passwd");
+   while( $line=<SYSIN> ){
+     chomp($line);
+     next if substr($line,0,1) eq '#';  # skip comments
+     next unless($line);
+     ($name,undef,$etalon_uid,$etalon_gid,$etalon_c,$etalon_home,$etalon_shell)=split(/\:/,$line);  
+     if( $etalon_c =~/"(.*)"/ ){
+        $etalon_c=$1; # you do not need ancomapssing quotes in the comment field. This is bad practice
+     }   
+     next if ($name eq 'nfsnobody');
+     next if $etalon_uid<$MIN_UID;
+     next if $etalon_uid>$MAX_UID;
+     logme('I',"Processing user record: $line");
+     process_record($line);     
+   } # while
+   close SYSIN; 
+
+   logme('X',"\n\n*** Generated commands were written to  $GENERATED_SCRIPT ***\n\n");
+   close SYSOUT; 
+   out(`cat "$GENERATED_SCRIPT"`);
+
+   if( $runme_flag ){
+      out('You can cancel execution within 10 sec interval using Ctrl-C');
+      `bash $GENERATED_SCRIPT`;
+      if( $? ){
+         logme('A',"Non zero rc from $GENERATED_SCRIPT. Something probably went wrong ***\n");
+         exit 255;
+      }
+   } 
+#
+# Clean up 
+#
+   `cd $WORKDIR/Reference && rm *`; # there is no reason to keep those files    
+   exit 0;
+
+sub process_record
+# Create or modify particular user
+{  
+   if($name eq $test_user){
+      $DB::single = 1;
+   }   
+   if( exists($local_user{$name}) ){
+      $user_record=$local_user{$name};
+      chomp($user_record);
+      ($uid,$gid,$c,$home,$shell)=split(/\:/,$user_record);
+      if( $uid != $etalon_uid || $gid !=$etalon_gid || $c ne $etalon_c || $home ne $etalon_home || $shell ne $etalon_shell ){
+         standartize($name);
+      }
+   }else{
+      create_new($name);
+   }  
+} # process_record
+              
+sub create_new
+# Create new account
+{
+my ($primary_group);
+  logme('I', "*** Creating an account for user: $name ,$etalon_uid,$etalon_gid,$etalon_c,$etalon_home,$etalon_shell\n");                       
+  $primary_group=$etalon_gid;
+  
+#                     
+# Generate list of additional groups
+#
+  $groups='';
+  @required_groups=split(/,/,$belong_to_groups{$name});
+  foreach $group ( @required_groups ){
+      unless( getgrnam($group) ){
+         logme('I',"Creating group $group with GID $etalon_gid\n");       
+         gen_command("$groupadd_command -g $etalon_gid $group");
+         $group_by_name{$group}=$etalon_gid;
+         $group_by_gid{$etalon_gid}=$group;    
+      }
+      if( $groups ){
+         $groups .=",$group";
+      }else{
+        $groups=$group;
+      }
+  } # for
+        
+#
+# Check if home directory exists and had the right ownership
+#
+   $home_dir=$etalon_home;
+   if( -d $home_dir ){
+     $is_home_dir_exist=1;
+   }else{
+     $is_home_dir_exist=0;
+   }
+   if( $primary_group>0 ){
+      # numeric group does not exist. We can create if GID=UID, or if we know the symbolic name
+      $group='';
+      if( $etalon_uid==$etalon_gid ){
+         $group=$name;
+      }elsif( exists ($group_by_gid{$etalon_gid}) ){
+         $group=$group_by_gid{$etalon_gid};
+      }
+      if( $group ){
+       logme('I',"creating primary group $group $etalon_gid\n");       
+       gen_command("$groupadd_command -g $etalon_gid $group");
+       $group_by_name{$group}=$etalon_gid;
+       $group_by_gid{$etalon_gid}=$group;
+      }else{
+      logme('I',"Primary group given as numeric, but the group with this GID does not exist. Created \n ");
+      }    
+   } elsif( exists($group_by_name{$primary_group}) ){
+      $etalon_gid=$group_by_name{$primary_group};
+   } elsif(  $name eq $primary_group){
+      $etalon_gid=$etalon_uid;
+      $group=$name;
+      gen_command("$groupadd_command -g $etalon_gid $group");
+      $group_by_name{$group}=$etalon_gid;
+      $group_by_gid{$etalon_gid}=$group;
+   }else{
+      logme('I',"*** Group with GID $primary_group does not exist. Created...\n");
+      $grname=$reference_grname{$primary_group};
+      gen_command("$groupadd_command -g $etalon_gid $grname");
+      $group_by_name{$etalon_gid}=$etalon_uid;
+      $group_by_gid{$etalon_uid}=$etalon_gid; 
+   } 
+   if( $shell_overwrite){
+      $etalon_shell=$default_shell; # replace shell as specified in options. 
+   }      
+   if( $groups ){
+      gen_command(qq($useradd_command -u $etalon_uid -g $etalon_gid  -G $groups -c "$etalon_c" -m -d $etalon_home -s $etalon_shell $name));
+   }else{
+      gen_command(qq($useradd_command -u $etalon_uid -g $etalon_gid -c "$etalon_c" -m -d $etalon_home -s $etalon_shell $name));
+   }
+
+   # set password using formula first+last, "minus sign", the last 4 digits of the phone
+   if( length($etalon_c)>4 && substr($etalon_c,-4,4) =~/d{4}/ ){
+      # Phone is the last element of $etalon_c and can be used for temp password
+      $pass=substr($name,0,1).substr($name,-1,1).'-'.substr($etalon_c,-4,4);
+      gen_command("echo $name:$pass | chpasswd");
+   }   
+                    
+   #
+   # Now try to normalize pre-existing home dir. which might already exist, despite the fact that user does not
+   #
+                    
+   if( $is_home_dir_exist){
+      # possibly the account was deleted and now restored 
+      gen_command("chown $name:$group_by_name{$primary_group} $etalon_home"); # group was not created at the moment
+      #gen_command("chmod 751  $name");
+   }                
+} # create_new
+
+sub standartize
+# Modify existing account so that it matched the reference account
+{
+my $ownership_changes=0;
+      logme('I',"*** Standartizing account $name\n");
+                        
+      if(   $etalon_uid != $uid ){
+         logme('I',"*** Modifing a UID for user: $name: $uid -> $etalon_uid  \n");
+         gen_command("$usermod_command -u $etalon_uid -c '$etalon_c' $name");  # both UID and comment are standartized
+         ++$ownership_changes;     
+      }else{
+         if( $c ne $etalon_c ){
+            logme('I',"*** Replacing comment for user: $name to '$etalon_c'\n");
+            gen_command("$usermod_command -c '$etalon_c' $name"); # only commnet is standartized
+         }
+      }
+      #
+      # There three cases here:  (1) group does not exist; (2) group exist but have a different GID
+      #
+      if( $gid != $etalon_gid ){
+         # operations below are only for User Private Groups
+          ++$ownership_changes;
+         $grname=$reference_grname{$etalon_gid};
+         if( exists($group_by_gid{$gid}) ){
+            logme('I',"*** Changing primary group from $gid  to $etalon_gid \n");
+            gen_command("$usermod_command -g $etalon_gid $name");           
+         }else{
+            logme('I',"*** Group with GID $etalon_gid does not exist, Creating...\n");
+            gen_command("$groupadd_command -g $etalon_gid $grname");
+            $group_by_name{$etalon_gid}=$etalon_uid;
+            $group_by_gid{$etalon_uid}=$etalon_gid; 
+            gen_command("$usermod_command -g $etalon_gid $name");              
+         }
+      }
+                             
+      if ( -d $etalon_home && $etalon_home eq $home ){
+         if($ownership_changes ){
+           # accomodate for uid or primary gid changes propagted from the reference server 
+           gen_command("chown $name:$group_by_name{$etalon_gid} $etalon_home"); # just in case   
+           gen_command("chown -R $name:$etalon_gid $etalon_home");
+           #gen_command("chmod 751 $etalon_home");
+         }  
+      }elsif( ! -d $etalon_home ){
+         gen_command("mkdir -p -m 700 $etalon_home");  # Create home directory if it is absent   
+         gen_command("chown $name:$group_by_name{$etalon_gid} $etalon_home"); # just in case          
+      }elsif( $etalon_home ne $home ){
+         gen_command("$usermod_command -d $etalon_home $name");
+      }         
+                        
+#
+# Adding the user to all groups to which he belongs on the reference server
+#
+      @required_groups=split(/,/,$belong_to_groups{$name});
+      foreach $gr (@required_groups){
+         if ( exists($group_by_name{$gr}) ){
+            # this group exist in /etc/group 
+            chomp($current_groups=`groups $name`); # group to which the user belong on the local server 
+            (undef,$current_groups)=split(/\s*\:\s*/,$current_groups);
+            @user_local_groups=split(/\s+/,$current_groups);
+            unless( grep( $_ eq $gr,@user_local_groups)){         
+              gen_command("$groupmod_command -A $name $gr"); # add this account to the group in question
+            }
+         }else{   
+            logme('I',"Group $gr does not exists \n");
+            gen_command("$groupadd_command -g $reference_gid{$gr} $gr"); # add this account to the group in question
+            gen_command("$groupmod_command -A $name $gr"); # add this account to the group in question
+         }
+         
+      } #foreach
+
+} # standartize
+              
+sub gen_command {
+  out("$_[0]\n");
+  print SYSOUT "$_[0]\n";
+}
+
+#       
+# Parsing arguments to prevent hacker attacks by injection of shell code
+# Arg 0 - value, Arg 1 -- type of check (f -file, d -directory, /patterns/,s set of symbols)
+sub sanity_check
+{
+my ( $fpath, $fname );  
+my $danger="/ (){}[]\$\@\'\;\:<>\\=\!\%\&\|\*";
+   # $_[0]=~tr/$danger//d;
+   unless (  -e $_[0] ){
+      abend("file $_[0] does not exists\n");
+   }
+   $r=rindex($_[0],"/");
+   if(  $r >-1 ){
+      $fpath=substr($_[0],0,$r);
+      $fname=substr($_[0],$r+1);
+   }else{
+      $fname=$_[0];
+   }
+   return $_[0];
+}      
+
+sub command
+{
+   logme('I',"Executing: $_[0]\n");
+   $rc=`$_[0]`;
+   if(  $rc){
+      logme('I',"Troubles executing $_[0]: $rc\n");
+   }
+}
+#
+# softpano.pm -- Set of standard softanorama subroutines
+#
+sub autocommit
+{
+# parameters
+my ($archive_dir,$use_git)=@_; #Script name can be with ewxprentionpl or without. 
+#
+#  Local vars
+#
+my $build_timestamp;
+my $script_delta=1;
+my $file=( ($last=index($0,'/'))>-1 ) ? substr($0,$last+1):$0;
+      ( ! -d $archive_dir ) && `mkdir -p $archive_dir`;
+      if(  -f "$archive_dir/$file"  ){
+         if( (-s $0 ) == (-s "$archive_dir/$file")   ){
+            `diff $0 $archive_dir/$file`;
+            $script_delta=( $? == 0 )? 0: 1;
+         }
+         if( $script_delta ){
+            chomp($build_timestamp=`date -r $archive_dir/$file +"%y%m%d_%H%M"`);
+            `mv $archive_dir/$file $archive_dir/$file.$build_timestamp`;
+         }
+      }
+      if(  $script_delta){
+         `cp -p $0 $archive_dir/$file`;
+          ($use_git) && `cd $archive_dir && git commit $archive_dir/$file`; # autocommit
+      }
+} # autocommit
+sub get_config
+{
+my $config_file=$_[0];
+my @conf=`cat $config_file`;
+my ($line,$i);
+   for( $i=1; $i<@conf; $i++ ){
+      chomp($line=$conf[$i]);
+      if( substr($line,0,1) eq '#' ){
+         $conf[$i]='';
+         next;
+      }
+      if( $line eq '' || $line=~/^\s*$/ ){
+         $conf[$i]=''; # emply line
+         next;
+      }
+      if( $line=~/^\s*(.*\S)\s*$/ ){
+         $line=$1;
+      }
+      if( $line=~/^(\w+)\s*=\s*['"](.*?)['"]/ ){
+         if( $2=~tr/'"// ){
+            die(qq(Wrong value $1 in line $i of config file $config_file -- string parameter can't contain ' or "" within its value.));
+         }
+         $conf[$i]='$'."$1='$2'";
+      }elsif( $line=~/^(\w+\s*=\s*\d+)/ ){
+         $conf[$i]='$'."$1";
+      }else{
+         print "Line $i ($line) in config file $config_file  is not recognizable configuration statement and was skipped\n";
+      }
+   }
+   if( $debug ){
+      print join("\n",@conf),"\n";
+   }
+   for( $i=1; $i<@conf; $i++ ){
+      next unless($conf[$i]);
+      eval($conf[$i]);
+   }
+   return 0;
+} # get_config
+sub standard_options
+{
+   helpme() if exists $options{'h'};
+   if( exists($options{'d'}) ){
+      if( $options{'d'} =~/^(\d)\:(.*)$/ ){
+         $debug=$1;
+         $test_user=$2;
+      }elsif( $options{'d'}=~/\d/ ){
+         $debug=$options{'d'};
+      }else{
+         die("Wrong value of option -d ($options{'d'}).Should be iether single digit of digit and test user like -d '2:frankj'\n\n");
+      }   
+   }    
+  
+   if( exists $options{'v'} ){
+      if(  $options{'v'}>=0 && $options{'v'}<=3){
+         logme('V',$options{'v'},$options{'v'});
+      }else{
+         logme('E','The value of option v (number of parallel transfers) is outside the range 0..3. 3 assumed');
+         logme('V',3,3);
+      }
+   }
+
+   if(  exists  $options{'c'}  ){
+      $config_file=$options{'c'};
+      if( -f $config_file && -r $config_file ){
+         get_config($config_file);
+      }else{
+         abend("Config file $config_file does not exists, or does not have read permissions for the user\n\n");
+      }
+   }
+}
+
+sub logme
+# logme: Standard SP package diagnostic messages generator. Version 2.8 (Nov 1, 2020)
+{
+#Parameters
+my ($package, $filename, $lineno) = caller;
+my $message=$_[1];
+   chomp($message); # we will add \n ourselves
+# two special types messages 'V' -- set verbosity and 'X' print summary. 
+# NOTE: Call logme('V') simply prints the content of the buffer. Useful in processing of options for defering messages until LOR_DIR is set.  
+   if( $_[0] eq 'V' ){
+      # set verbosity
+      $min_msglevel1=length("WEST")-$_[1]-1; # verbosity 3 is max and means cut level is 4-3-1=0  -- the index corresponding to code 'W'
+      $min_msglevel2=length("WEST")-$_[2]-1; # same for log only (like in MSGLEVEL in mainframes ;-)
+      return;
+   }elsif( $_[0] eq 'X' ){
+      my $summary=''; # string which contains stat of how many "error" and "severe error" messages were generated.       
+      for( my $i=0; $i<=length('WEST'); $i++ ){
+         next unless( $ercounter[$i] );
+         $summary.=" ".substr('WEST',$i,1).": ".$ercounter[$i];
+      } # for
+      if( scalar(@_)>1 ){
+         out($message);
+         out("\n\n=== MESSAGES SUMMARY $summary ===\n");
+      }
+      if( $ercounter[1] + $ercounter[2] ){
+         out("$ermessage_db[1]\n") if $ercounter[1]>0; # errors
+         out("$ermessage_db[2]\n") if $ercounter[2]>0; # severe errors 
+      }
+      return;
+   } #if
+#
+# Now let's process "normal message", which should have W,E,S, or T severity code.
+#
+my $ercode=uc(substr($_[0],0,1)); # message code can be several letters long, not only a single letter
+# my $ersuffix=(length($_[0])>1) ? substr($_[0],1,1):''; # suffic or error code currently is unused. 
+
+     $message="$SCRIPT_NAME\-$lineno$ercode: $message"; # Form diagnostic message with error code, line number and the text of the message
+my   $severity=index("WEST",$ercode);
+     if( $severity==-1){
+         out($message); # informational messages
+         return;
+     }
+     $ercounter[$severity]++; # Increase messages counter  for given severity (supressed messages are counted too)
+     return if(  $severity<$min_msglevel1 && $severity<$min_msglevel2 ); # no need to process if this is lower then both msglevels
+
+#----------------- Error history -------------------------
+      if(  $severity > 0 ){
+         # Warnings, Errors and Severe Errors should be stored so that later then can be displayed in summary.
+         $ermessage_db[$severity] .= "\n\n$message"; # this actually can server as a buffer during processing of options
+      }
+#--------- Message printing and logging --------------
+      # special codes has $verify ==-1; We treat separatly verbosity for log and console.
+      if( $severity>-1 ){
+         #one of 4 legit codes W,E,S and T (unsupressable)         
+         # $min_msglevel2 defines writing to SYSLOG. 3 means all (Warning, Errors and Severe errors) to be printed
+         if( $severity<2 ){
+            ($severity >= $min_msglevel1) && print STDERR "$message\n"; # warnings and errors
+            ($severity >= $min_msglevel2) && print SYSLOG "$message\n";
+         }else{
+            # Serious messages
+            ($severity >= $min_msglevel1) && print STDERR ("=" x length($message)),"\n",$message,"\n",("=" x length($message)),"\n";
+            ($severity >= $min_msglevel2) && print SYSLOG ("=" x length($message)),"\n",$message."\n",("=" x length($message)),"\n";           
+         }       
+      } # $severity>-1
+} # logme
+
+sub out
+#direct output of lines suppled as parameters
+#Unlike logme it can accept multipile lines. Use out('') for spaceline.
+{
+   for( my $i=0; $i<@_; $i++ ){
+      print STDERR "$_[$i]\n";
+      print SYSLOG "$_[$i]\n";
+   }
+} # out
+
+sub abend
+#print diagnostic and terminate the script
+{
+my $message;
+my ($package, $filename, $lineno) = caller;
+   $message="$SCRIPT_NAME-T$lineno $_[0]. Exiting...\n\n";
+   out($message); # Syslog might not be available but STDERR always is 
+   exit 255;
+} # abend
+
+sub banner {
+#print banner and clean LOG_DIR
+my $title=$_[0]; 
+my $LOG_DIR=$_[1];
+my $LOG_RETENTION_PERIOD=$_[2];
+my $rc=( -d $LOG_DIR ) ? `find $LOG_DIR -name "*.log" -type f -mtime +$LOG_RETENTION_PERIOD -delete` : mkdir($LOG_DIR,700) ; # cleanup
+   chomp(my $timestamp=`date +"%y%m%d_%H%M"`);
+   $LOG_FILE="$LOG_DIR/$SCRIPT_NAME.$timestamp.log";
+   open(SYSLOG,'>',$LOG_FILE) || die("Fatal error: unable to open $LOG_FILE");
+   chomp($timestamp=`date "+%y/%m/%d %H:%M"`);   
+   chomp( my $BUILD_DATE=`date -r $0 +"%y%m%d_%H%M"`);
+   out('',$title."( Build $BUILD_DATE ). Date: $timestamp","Logs are at $LOG_FILE. Type -h for help.",('=' x length($title)),'');
+}
+
+sub mkdirs
+# sub mkdirs: create multiple directories using option -p
+{
+   foreach( @_ ){
+      next if(  -d $_);
+      system("mkdir -p $_");
+      abend("Can't create directory $_") unless ( -d $_ );
+   }
+}
+sub helpme
+{
+   open(SYSHELP,'<',$0);
+   while($line=<SYSHELP>) {
+      if ( substr($line,0,3) eq "#::" ) {
+         print substr($line,3);
+      }
+   } # for
+   close SYSHELP;
+   while(<DATA>){
+      print " $_";
+   } # while
+   exit 0;
+}
+sub getopts
+{
+my ($options_def,$options_hash)=@_;
+my ($first,$rest,$pos,$cur_opt);
+   while(@ARGV){
+      $cur_opt=$ARGV[0];
+      last if( substr($cur_opt,0,1) ne '-' );
+      if(  $cur_opt eq '--'){
+          shift @ARGV;
+          last;
+      }
+      $first=substr($cur_opt,1,1);
+      $pos = index($options_def,$first);
+      if( $pos==-1){
+         warn("Undefined option -$first skipped without processing\n");
+         shift(@ARGV);
+         next;
+      }
+      $rest=substr($cur_opt,2);
+      if( $pos<length($options_def)-1 && substr($options_def,$pos+1,1) eq ':' ){
+         # option with parameters
+         if( $rest eq ''){
+           shift(@ARGV); # get the value of option
+           unless( @ARGV ){
+              warn("End of line reached for option -$first which requires argument\n");
+              $$options_hash{$first}='';
+              last;
+           }
+           if(   $ARGV[0] =~/^-/ ){
+               warn("Option -$first requires argument\n");
+               $$options_hash{$first} = '';
+           }else{
+               $$options_hash{$first}=$ARGV[0];
+               shift(@ARGV); # get next chunk
+           }
+         }else{
+            #value is concatenated with option like -ddd
+            if( ($first x length($rest)) eq $rest ){
+               $$options_hash{$first} = length($rest)+1;
+            }else{
+               $$options_hash{$first}=$rest;
+            }
+            shift(@ARGV);
+         }
+      }else {
+         $$options_hash{$first} = 1; # set the option
+         if(  $rest eq ''){
+            shift(@ARGV);
+         }else{
+            $ARGV[0] = "-$rest"; # there can be other options without arguments after the first
+         }
+      }
+   }
+}
+__DATA__
+
+It makes a slice of passwd/group/shadow  from MIN_US (option -m) to MAX_UID (option -M) on the local host
+conformat with identical accounts on the reference server generating command that 
+(supposely) will eliminate all differences.
+
+This is generalization of the approach that is used by sysadmin for homogenious using server part (for exampe RHEL only)
+when they just replicate auth files between servers to the heterogenious server park consisting on multiple
+versions of Linux (Debian, ArchLinux, RHEL, etc) 
+
+It does not delete accounts that exist only on local server, so this is not a full but partial(one way) synchonization. 
+
+Default minimum treashold for user accounts is 1000, can be changed via option -m. 
+
+For each user account that fit into speciofied interval of UIDs, the utility compares the record on the local server 
+and for each foeld that is different generates a command that  eliminate this difference. 
+
+If a user account exist only on remote (reference) server but is not present on the local server, the account is created with the same UID and GID 
+and home directory.
+
+Utility needs one argument -- remote or local directory with the authentication files to be served as reference
+
+Usage:  
+   usersync -h # this screen
+   usersync /Apps/Sys/Auth # directory on local server
+   usersync b1:/etc        # directory on the remote server
+   usersync                # Whatever is defined in the config file by variables REFERENCE_DIR or REFERENCE_SERVER
+   
+Options:
+   -g -- group -- set groups  
+   -h -- this screen
+   -v -- verbosity (0-3). Can be specified as two digits with the second digit adding what messages are written tot he log 
+         Max verbosity 3 means the warning, error and severe errors will be displayed. -v 2 cuts warnings, -v 1 warning and errors
+   -m -- minimum UID for the interval that will be syncronized
+   -M -- maximum UID for the interval that will be syncronized
+   -s -- force specific shell on syncronized accounts (useful for transfering accounts from Solaris or AIX)
+   -x -- immeduately execute generated command without manual inspection (not recommended) 
+   -c -- localtion of config file with the name of usersync.conf. 
+   -S -- ssh options that are directly passed to ssh
+   -l -- the location of the directory with log files. The default retention period for logs is 365 days.
+         For example
+            -l /var/opt/Dormant_users_stats
+         or
+            -l '/var/opt/usersync:30' -- specifies LOG_DIR and changes the default log retention period
