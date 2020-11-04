@@ -1,11 +1,22 @@
 #!/usr/bin/perl
-#:: Comparison of tar files created fro selected directories with the actual content of the directory and creation of the history of changes
-#:: Useful for such directories as /etc/ when the server is managed by several admins. 
-#:: Also can be used for recovery.
-#
+#:: The utility compares tar files created for selected directories with the actual content of the directory 
+#:: It maintains history in a special directory (the default is /var/Dirhist_base) both as a set of tar files 
+#:: and as the generations of each individual files changed in the particular directory.  
+#::
 #:: Copyright by Nikolai Bezroukov, 2010-2020 
 #:: Released under Perl Artisitic License
 #::
+#:: Designed to be run from cron Daily or hour invocations create the history of changes maked in the partiuclat directory 
+#:: which is helpful for a forensic investigation. The classic example is actions of multiple sysadmin on /etc/files. 
+#:: It was actually written after one such SNAFU happened about 10 years ago. 
+#:: 
+#:: Also can be used for recovery of condifugratuion files. 
+#:: For example, when you accidentally proporate authentiation related files (passwd, groups, shadow) from RHEL6 to RHEL 7. 
+
+#:: Invocation
+#::    dirfile <options> [<directory>]
+#:: 
+#:: NOTE: If argument is given it is interpreted as the directory and both ignore and watch files are ignored, even if specified 
 #::
 #:: Options:
 #::   -b -- base  (name of the tar archive to use as a reference point)
@@ -15,6 +26,9 @@
 #::         1 or -v   -- only "serious errors" are displayed (default)
 #::         2 or -vv  -- only "serious errors" and "errors" are displayed
 #::         3 or -vvv -- "serious errors", "errors" and "warnings" are displayed
+#::   -x file -- absolute path to configuration fiels with files and subdirectories to ignore
+#::   -w file --  absolute path to configuration files with files and subdirectories to wantch 
+#::   -e email -- email of list of emails to remail report if one of weatched files was changed. 
 #::
 #--- Development History
 #
@@ -39,26 +53,40 @@
 #++ 0.89  2017/04/15   BEZROUN   set_utils changes destructive operations to echo if debug >=3
 #++ 0.90  2017/08/08   BEZROUN   Monitoring extended to multiple directories. Directories are now created with 700 permissions (just in case)
 #++ 0.91  2017/08/07   BEZROUN   removed baseline suffix from archives. It is useless
-#++ 0.92  2019/10/04   BEZROUN   Instead of cd $dir && tar option -C in tar is used. 
+#++ 0.92  2019/10/04   BEZROUN   Instead of cd $SelectedDir && tar option -C in tar is used. 
 #++ 1.00  2020/11/03   BEZROUN   Major rewrite. Code generalised for arbitraty set of directories.
+#++ 1.10  2020/11/04   BEZROUN   Logic and diagnistics improved. 
 # ------------------------------------------ START --------------------------------------------
    $debug=0;
    $test_file='';
-   $VERSION='1.0'; ;
+   $VERSION='1.1'; ;
    $SCRIPT_NAME='dirhist';
    chomp($today=`date +"%y%m%d_%H%M"`);
    chomp($HOSTNAME=`hostname -s`);   # we will always use short hostname in diagnistic messages
    set_utils();
    $HOME=$ENV{'HOME'};
-   
- 
+     
 #
-# Default Parameters
-# 
-   $EXCLUDED_FILES="$BASE/$SCRIPT_NAME".'_exclude.lst';
-   $WATCHED_FILES="$BASE/$SCRIPT_NAME".'_watch.lst';
+# Initialization for logme
+#
+   @ermessage_db={}; # accumulates messages for each category (warning, errors and severe errors)
+   @ercounter=(0,0,0,0);
+   logme('V',2,3); # initialize logme so that it can be used in options 
+   
+#
+# Default Parameters including BASE and LOG_DIR
+#
+   $EMAIL_LIST=''; #CONFIG++ directory for tar files and generation of changed files 
+   $BASE='/var/'.ucfirst($SCRIPT_NAME).'_base'; #CONFIG++ directory for tar files and generation of changed files 
+   $EXCLUDED_FILES="$BASE/$SCRIPT_NAME".'_ignore.lst';  #CONFIG: the file with the list of excluded file and subdirectories for each watched firectory in YAML-style dictionary format.  
+   $WATCHED_FILES="$BASE/$SCRIPT_NAME".'_watch.lst';     #CONFIG: the file with the list of watched file and subdirectories for each watched firectory in YAML-style dictionary format. 
    $WATCHED_DIRS='';
-  
+   $LOG_DIR="$BASE/Logs"; #CONFIG:  The directory for logs. The default is /var/Dirhist_base
+   `mkdir -p -m 700 $LOG_DIR` unless ( -d "$LOG_DIR" );
+   $LOG_RETENTION_PERIOD=365;  #CONFIG: Number of day logs are kept in the LOG_DIR directory. The default is 365 days (one year)
+#
+#  Process config file, if any 
+#
    @CONFIG_LOCATIONS=("$HOME/.config/$SCRIPT_NAME.conf", "$HOME/$SCRIPT_NAME.conf","/etc/$SCRIPT_NAME.conf"); 
    for( $i=0; $i<@CONFIG_LOCATIONS; $i++ ){
       next unless( -f $CONFIG_LOCATIONS[$i] );
@@ -67,25 +95,11 @@
    }
    if( $WATCHED_DIRS ){
       $WATCHED_DIR_LIST=split(/,?\s+/,$WATCHED_DIRS)
-   }   
+   } 
+
 #
-# Initialization for logme
-#
-   @ermessage_db={}; # accumulates messages for each category (warning, errors and severe errors)
-   @ercounter=(0,0,0,0);
-   logme('V',3,3); # initialize logme so that it can be used in options 
-   
-#
-# Set up BASE and LOG_DIR
-#
-   $BASE='/var/'.ucfirst($SCRIPT_NAME).'_base';
-   $LOG_DIR="$BASE/Logs"; # used for opening SYSLOG
-   `mkdir -p -m 700 $LOG_DIR` unless ( -d "$LOG_DIR" );
-   $LOG_RETENTION_PERIOD=365;
-#
-# Options
-#
-   
+# Process options, if any 
+#   
    getopts("c:d:v:hl:m:e:w:x",\%options);
    if ( exists($options{'l'}) ) {
       # SYSLOG
@@ -96,6 +110,7 @@
       }   
       `mkdir -p -m 700 $LOG_DIR` unless ( -d "$LOG_DIR" );      
    }
+
       
    banner(ucfirst($SCRIPT_NAME)." -- Syncronization of user accouns for classic Unix authentication files), Version $VERSION",$LOG_DIR,$LOG_RETENTION_PERIOD);
    standard_options(); 
@@ -108,7 +123,9 @@
       logme('V',3,3);
    }
    if( exists($options{'e'}) ){
-      $distribution_list=$options{'s'};
+      $EMAIL_LIST=$options{'s'};
+   }else{
+      $EMAIL_LIST=get_primary_admin(); # try to get it iether from /etc/passwd UID 0 field or /root/primary_admin 
    }
    
    if( exists($options{'x'}) ){  
@@ -131,13 +148,7 @@
       }
       $EXCLUDED_FILES=$WATCHED_FILES='';      
    }   
-#
-# Mail addresses
-#
-   unless(defined($distribution_list)){
-     $primary_admin=get_primary_admin(); # try to get it iether from /etc/passwd UID 0 field or /root/primary_admin 
-     mail_distrib_list($primary_admin); # populate mail distribition list with the first address. 
-   }  
+  
 
 #
 # Save previous message
@@ -187,13 +198,13 @@
                  if ( -d $element_with_path){ 
                     $IGNORED_DIR{$element_with_path}=1; # directories should have traling slash to distinguish them from files. 
                  }else{
-                    logme('S',"The directory $element_with_path that you want to ignore does not exist on the server or is a symlink\n");
+                    logme('W',"The directory $element_with_path that you want to ignore does not exist on the server or is a symlink\n");
                  }   
                }else{
                   if( -f $element_with_path){ 
                     $IGNORED_FILE{$element_with_path}=1;
                   }else{
-                    logme('S',"The file $element_with_path that you want to watch does not exist on the server or is a symlink \n");
+                    logme('W',"The file $element_with_path that you want to watch does not exist on the server or is a symlink \n");
                   } 
                }            
             }
@@ -271,62 +282,67 @@
 #
 # MAIN LOOP
 #   
-my $changelist;
-   $alert_no=0; # number of changes important files
+my $ChangedWatchedLst='';
+   $alert_no=0; # number of changes in watched file and files in watched sudirectories
    for ($watched_dir_no=0; $watched_dir_no<@WATCHED_DIR_LIST; $watched_dir_no++ ){
-      $DIR=$WATCHED_DIR_LIST[$watched_dir_no];
-      $ref_watched_file=$WATCHED_FILE{$DIR}; # list of critical files
-      $ref_watched_dir=$WATCHED_DIR{$DIR}; # list of critical-dirs
+      $SelectedDir=$WATCHED_DIR_LIST[$watched_dir_no];
+      out("\n========= PROCESSING THE DIRECTORY $SelectedDir =========\n");
+      $ref_watched_file=$WATCHED_FILE{$SelectedDir}; # list of critical files
+      $ref_watched_dir=$WATCHED_DIR{$SelectedDir}; # list of critical-dirs
       $rc=process_dir(); # now process this directory
       $alert_no+=$rc;
    }
-   close SYSLOG; # log 
-   close SYSMES; # this is email message 
+   close SYSLOG; # Close log to make possible emailing to recipients.  
+
    if ($alert_no>0) {
-      logme('X',"There are changes in watche directories'"); 
+      logme('X',"There are $alert_no changes in watched files and directories'"); 
+       if(length($ChangedWatchedLst)>80){
+          $ChangedWatchedLst=substr($ChangedWatchedLst,0,100);
+          $last_blank=rindex($ChangedWatchedLst,' ');
+          $ChangedWatchedLst=substr($ChangedWatchedLst,0,$last_blank).' ... ';
+       }   
+      ($EMAIL_LIST) && `cat $LOG_FILE | mail -s "$HOSTNAME Dirhist report about $alert_no changes in $ChangedWatchedLst" "$EMAIL_LIST"`;
    } 
    exit $alert_no; 
   
 sub process_dir
 { 
-my @changed_files;
-my %what_changed;
-my $report; # report about ignored files (names only))
+my @changed_files; # should be reinitialised on each entry
+my %what_changed; # should be reinitialised on each entry
 #
 # Set Directories
 #
-  $DIR_STORAGE=substr($DIR,1); # delete '/'
-  $DIR_STORAGE=~tr[/][_];
-  $BASE_DIR="$BASE/$DIR_STORAGE/Archives";
-  $DIFF_DIR="$BASE/$DIR_STORAGE/Diffs";
-  $HIST_DIR="$BASE/$DIR_STORAGE/History";
-  mkdirs($BASE_DIR,$DIFF_DIR,$HIST_DIR);   
-    
+   $DirSubfolder=substr($SelectedDir,1); # delete '/'
+   $DirSubfolder=~tr[/][_];
+   $ArchiveDir="$BASE/$DirSubfolder/Archives";
+   $DiffDir="$BASE/$DirSubfolder/Diffs";
+   $HistDir="$BASE/$DirSubfolder/History";
+   mkdirs($ArchiveDir,$DiffDir,$HistDir); # create all three major directory in the SelectedDir subfolder. 
 
 #
 # Baseline archive name
 #
-   if ( substr($DIR,0,1) ne '/' ){
+   if ( substr($SelectedDir,0,1) ne '/' ){
       abend(__LINE__,"Not an absolute name for the directory\n");
    }
-my $BASELINE_PREFIX=substr($DIR,1);
-   $BASELINE_PREFIX =~ tr/\//^/;
-my $BASELINE_ARCHIVE="$BASELINE_PREFIX.tar";
+my $TarballName=substr($SelectedDir,1); # name without extention .tar 
+   $TarballName =~ tr[\/][^];
+   $TarballFname=$TarballName.'.tar'; # tarball name with extention 
 
-   unless ( -f "$BASE_DIR/$BASELINE_ARCHIVE" ) {
-      logme('E',"Baseline does not exist: creating new at $BASE_DIR/$BASELINE_ARCHIVE\n");
-      `tar cvf $BASE_DIR/$BASELINE_ARCHIVE -C $DIR . `;
+   unless ( -f "$ArchiveDir/$TarballFname" ) {
+      logme('E',"Baseline tarball for the directory $SelectedDir does not exist: creating new at $ArchiveDir/$TarballFname");
+      `tar cvf $ArchiveDir/$TarballFname -C $SelectedDir . `;
       return;
    }
-   logme('I',"Baseline used: $BASE_DIR/$BASELINE_ARCHIVE");
+   logme('I',"Baseline used: $ArchiveDir/$TarballFname");
   
 
 #
 # Directory changes database
 # Currently is done using tar, as tar has comparison option. But can be done using a different archiver.
 
-   @changed_files=`tar -df $BASE_DIR/$BASELINE_ARCHIVE -C $DIR  2>&1`;
-
+   @changed_files=`tar -df $ArchiveDir/$TarballFname -C $SelectedDir  2>&1`;
+   return 0 if scalar(@changed_files)==0; # does not make any sense to process this directory further
 #
 # process them one-by-one, filtering those file that you do not care about (noise)
 #
@@ -337,133 +353,114 @@ my $BASELINE_ARCHIVE="$BASELINE_PREFIX.tar";
       ($file,$what)=split(/\:\s+/,$file,2);
       chomp($what);
       if (index($what,"Cannot stat")> -1) {
-         add_to_email_message("$file: $what","$file was removed ($what)\n\n");
+         logme('S',"$file was removed ($what)");
          next;
       }
       ($debug) && print "changed: $file,$what\n";
       $file=~s/^\.\///; # remove prefix
       if (exists($what_changed{$file}) ) {
-         $what_changed{$file} .= ", $what";
-      } else {
+         $what_changed{$file} .= ", $what"; # add to the descriotion of change bacuse tar list each change on a separate line
+      }else{
          $what_changed{$file} = "$what";
       }
    }
-   return 0 if (scalar(@changed_files)==0); # does not make any sense to process this directory further
    
-   $changed=0;
+   
+my $changed_watched_file_no=0; #total number of changed files classified as "watched" or residing in the watched directories  
    foreach $file ( keys %what_changed ){
-      $file_with_path=$DIR.'/'.$file;
+      $is_changed=0;
+      $file_with_path=$SelectedDir.'/'.$file;
       next if exists($IGNORED_FILE{$file_with_path});
       $last_slash=rindex($file,'/');
       if( $last_slash > -1) {
          $fpath=substr($file,0,$last_slash+1);
-         next if exists($IGNORED_DIR{"$DIR/$fpath"});
+         next if exists($IGNORED_DIR{"$SelectedDir/$fpath"});
       }else{
          $fpath='';
-      }   
-      if( exists( $$ref_watched_file{$file}) ){
-         logme('S',"Watched file $file_with_path changed");
-         $changed++;
-      }elsif( $fpath && exists( $$ref_watched_dir{$fpath}) ){
-         logme('S',"File $file in watched directory $DIR/$fpath changed");
-         $changed++;
       }  
-       
+      
+      if( exists( $$ref_watched_file{$file}) ){
+         logme('E',"Watched file $file_with_path changed $what_changed($file} ");        
+         $is_changed=1;
+      }elsif( $fpath && exists( $$ref_watched_dir{$fpath}) ){
+         logme('E',"File $file in watched directory $SelectedDir/$fpath changed");
+         $is_changed=1;
+      } 
+      
+      if( $is_changed ){      
+         logme('W','Old version: '.`$LS -l $HistDir/$file`); 
+         logme('W','New version: '.`$LS -l $SelectedDir/$file`); 
+         $changed_watched_file_no++; #total number of changed files 
+         $ChangedWatchedLst.=" $SelectedDir/$file";
+      } 
+      
       #
-      # Update history from the tar file
-      #      
-      if( -e "$HIST_DIR/$file" ){
-         chomp($timestamp=`date -r $HIST_DIR/$file "+%y%m%d"`);
-         shell("mv $HIST_DIR/$file $HIST_DIR/$file.$timestamp");
+      # Update history from the tar file. File with path is flattened by replacing with '^'
+      #
+             
+      if( -f "$HistDir/$file" ){
+         chomp($timestamp=`date -r $HistDir/$file "+%y%m%d"`);
+         shell("mv $HistDir/$file $HistDir/$file.$timestamp"); # preserve previous version in History tree 
       }
-      shell(qq(cd $HIST_DIR && tar xvf $BASE_DIR/$BASELINE_ARCHIVE "./$file"));
-      unless ( -e "$HIST_DIR/$file" ) {
-         logme('S',"INTERNAL: Unable to extract file ./$file from $BASE_DIR/$BASELINE_ARCHIVE");
+      shell(qq(cd $HistDir && tar xvf $ArchiveDir/$TarballFname "./$file")); # restores the file with path
+      unless ( -f "$HistDir/$file" ) {
+         logme('S',"INTERNAL: Unable to extract file ./$file from $ArchiveDir/$TarballFname");
          next;
       }
       
       $diff='';
       if( index(`file $file_with_path`,'text')>-1 ) {
-         $diff=`$DIFF $HIST_DIR/$file $file_with_path`;
+         # NOTE: diff makes sense only for text files
+         $diff=`$DIFF $HistDir/$file $file_with_path`;
          chomp($diff);
          next unless ($diff);
          #
          # There are differences
          #
-         ($debug) && print "$file was changed\n";
+         ($debug) && print "Diff file was created for $file\n";
          $current_ls=`$LS -l  $file_with_path`;
-         $previous_ls=`$LS -l $HIST_DIR/$file`;
-         $report .= "\n$file_with_path $what_changed{$file}\n\t$current_ls\n\t$previous_ls";         
+         $previous_ls=`$LS -l $HistDir/$file`;            
          $diff_file=$file;
          $diff_file =~ tr[\\][^];
          chomp($timestamp=`date -r $file_with_path "+%y%m%d"`);
-         open (SYSDIFF, ">>$DIFF_DIR/$diff_file.$today");
-         print SYSDIFF "=== DIFFERENCES FOR '$file_with_path' dated $timestamp ===\n\nCurrent: $current_ls Previous: $previous_ls $diff\n\n==============================\n\n";
+         open (SYSDIFF, ">>$DiffDir/$diff_file.$today");
+         print SYSDIFF "=== DIFFERENCES FOR '$file_with_path' dated $timestamp ===\n\nCurrent: $current_ls Previous: $previous_ls $diff\n\n===\n\n";
          close SYSDIFF;
+         ($is_changed) && diff2log("$file_with_path with following changes: $what_changed{$file}",$diff); # Report only for wantched files 
+
       }   
+   } # foreach
+   
+   if ($changed_watched_file_no==0){
+      logme('I',"No changes in watched files and subdirectoriues in the directory $SelectedDir occured since the last run\n");
+   }else{
+      logme('I',"$changed_watched_file_no watched file or files in watched sudirectiories were changed in the directory $SelectedDir since the last run\n");
+   }   
+   #
+   # Move tar archive to new name with time stamp (creation date) and create a new tar archive
+   #
+   if (scalar(@changed_files)>0){
+      chomp($timestamp=`date -r $ArchiveDir/$TarballFname "+%y%m%d_%H%M"`);
+      shell("mv $ArchiveDir/$TarballFname $ArchiveDir/$TarballName$timestamp.tar && gzip -f $ArchiveDir/$TarballName$timestamp.tar");
+      ($debug==0) && `tar cvf $ArchiveDir/$TarballFname -C $SelectedDir .`; # renew baseline only for debug=0    
    }
-   if ($changed==0){
-      logme('I',"No meaningful changes in content of $DIR detected\n");
-   } else { 
-      add_to_email_message("$what_changed{$file}",$diff);
-      $changelist.=" $DIR/$file";
-      #
-      # Move tar archive to new name with time stamp (creation date) and create a new tar archive
-      #
-      chomp($timestamp=`date -r $BASE_DIR/$BASELINE_ARCHIVE "+%y%m%d_%H%M"`);
-      shell("mv $BASE_DIR/$BASELINE_ARCHIVE $BASE_DIR/$BASELINE_PREFIX$timestamp.tar && gzip $BASE_DIR/$BASELINE_PREFIX$timestamp.tar");
-      ($debug==0) && `tar cvf $BASE_DIR/$BASELINE_ARCHIVE -C $DIR .`; # renew baseline only for debug=0    
-      add_to_email_message("report for $HOSTNAME===\n\n$report\n");    # send report about ignored files  to email message        
-   }
-   return $changed;
+   return $changed_watched_file_no;
 } # process_dir  
 
-
-#
-# Adds to $LOG_DIR/message
-#
-# Arg1 -- message
-# Arg2 -- list of tags (pretty elegant idea ;-)
-# Arg3..ArgN -- for each tag in tag stroing this is iether file (if tag is f)
-#           or string (if tag is 's') that should be inlcuded in the message
-sub add_to_email_message
+sub diff2log
 {
-my $subject=shift;
-my $message_string=shift;
-   # email message should be cumulative for all watched directories
-   unless ($message_opened) {
-      open(SYSMES,'>>',"$LOG_DIR/message");
-      $message_opened=1; # we need to open file only once
-   }   
-   print SYSMES "\n==== $subject =====\n";
-   $tag=substr($message_string,$tag,1);
-   if ($tag eq '<') {
-      $file=substr($tag,1);
-      if (-e $file) {
-         open(SYSIN, '<',$file);
-         while(<SYSIN>) {
-            print SYSMES $_;
-         }
-         close SYSIN;
-      } # if
-   } else  {
-      print SYSMES "$message_string\n";
-   }
-  
-} # add_to report
+my ($subject,$diff_string)=@_;
+   out("One way delta from diff for $subject");
+my @diff=split(/\n/,$diff_string);    
+   for( my $i=0;$i<@diff;$i++ ){
+      if( substr($diff[$i],0,1) eq '>' || substr($diff[$i],0,1)=~/\d/ ){
+         out($diff[$i]);
+      }  
+   } 
+} # diff2log
 
-sub report_problem {
-my $subject;
-   $subject=$_[0];
-   chomp($subject); # you need to clese the file before sending it
-   `cat $LOG_DIR/message $LOG_FILE | mail -s "$HOSTNAME $subject" "$distribution_list"`;
-}
-
-
-#
-# Save file with original timestamp as extension
-#
 sub savefile 
+# Save file with original timestamp as extension
 {
 my $filepath=$_[0];
 my $TARGET_DIR=$_[1];
@@ -472,9 +469,9 @@ my $filestamp;
     if (length($filename)==0 || length($filepath)==0 || length($TARGET_DIR)==0) {
        abend(__LINE__,"Wrong arguments to savefile: filepath=$filepath,TARGET_DIR=$TARGET_DIR,filename=$filename\n"); 
     }
-   if (-e "$TARGET_DIR/$filename") {
+   if (-f "$TARGET_DIR/$filename") {
       $filestamp=`date -r "$TARGET_DIR/$filename" +"%y%m%d_%H%M"`; chomp($filestamp);
-     shell("$MV $TARGET_DIR/$filename $TARGET_DIR/$filename.$filestamp");
+      shell("$MV $TARGET_DIR/$filename $TARGET_DIR/$filename.$filestamp");
    }
    shell("$CP -p $filepath $TARGET_DIR"); # save latest version in HISTORY with org timestamp and attributes. 
 } # savefile
@@ -482,7 +479,7 @@ my $filestamp;
 sub get_primary_admin
 # slurps /root/primary_admin and extracts email adress from it. If does not exist tries /etc/passwd root record. 
 {
-   if ( -e "/root/primary_admin" ) {
+   if ( -f "/root/primary_admin" ) {
      chomp($primary_admin=`cat /root/primary_admin`);
      if( index($primary_admin,':')>-1) {
        ($primary_admin, undef)=split(/:/,`cat /root/primary_admin`,2);
@@ -492,28 +489,18 @@ sub get_primary_admin
      $primary_admin=`grep -P '^root' /etc/passwd`;
      my @F=split(/:/,$primary_admin);
      $primary_admin=$F[4];
-     if( index($primary_admin,'@')>=1 ){
-        return $primary_admin;
-     }else{
-        logme('S','Unable to detect email address of primary administrator for the server. Please specify it in option -a, or in the file /root/primary_admin'); 
-        exit 255;
-     }
    }  
+   if( index($primary_admin,'@')>=1 ){
+      return $primary_admin;
+   }else{
+      logme('S','Unable to detect email address of primary administrator for the server. Please specify it in option -a, or in the file /root/primary_admin'); 
+      return '';
+   }
+     
 }
 #================================================================
 # Standard subroutines -- version 3.00 (Dec 11, 2014)
 #================================================================ 
-
-sub mail_distrib_list
-{
-  my $server_info;
-  if ($debug) {
-      $distribution_list=$primary_admin;
-      return;
-  }
-  $distribution_list.=$_[0];
-    
-} #  mail_distrib_list  
   
 sub abs 
 {
@@ -597,9 +584,9 @@ my ($line,$i);
          if( $2=~tr/'"// ){
             die(qq(Wrong value $1 in line $i of config file $config_file -- string parameter can't contain ' or "" within its value.));
          }
-         $conf[$i]='$'."$1='$2'";
+         $conf[$i]='$'.uc("$1")."='$2'"; # force upper case
       }elsif( $line=~/^(\w+\s*=\s*\d+)/ ){
-         $conf[$i]='$'."$1";
+         $conf[$i]='$'.uc("$1"); # force upper case 
       }else{
          print "Line $i ($line) in config file $config_file  is not recognizable configuration statement and was skipped\n";
       }
@@ -809,7 +796,7 @@ my ($first,$rest,$pos,$cur_opt);
    }
 }
 __DATA__
-The probrams creates a directory (the default is /var/Dirhist_base ) and a subdirectory for each watched directories in it.
+Thus utility creates a directory (the default is /var/Dirhist_base ) and a subdirectory for each watched directories in it.
 
 As this utility normally runs from cron the excluded and  eatched fioela re specified in two files
   
@@ -820,3 +807,5 @@ Those can be changed via the configuration file via optiox -x and -w
 
 For a test run on a certain directory you can specify the directory (or serveral directories) is argumnents to the program
 in this case no excluded files or watched files can be specified becuase they contain the list directories in thie own right. 
+
+All files shich can be set via iptions also can be set via config file with setting YAMP-stle dictionary format 
