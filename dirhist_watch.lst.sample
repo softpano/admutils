@@ -12,3 +12,4 @@
 /var/spool/mail
      root
 /var/spool/cron
+     /root
