@@ -275,7 +275,7 @@
          }
       } #while
    }else{
-      logme('E',"No watched files is used in this run\n");     
+      logme('E',"No watched files/dirs  config file ( $WATCHED_FILES ) was used in this run\n");     
    }      
   
    
@@ -295,13 +295,18 @@ my $ChangedWatchedLst='';
    close SYSLOG; # Close log to make possible emailing to recipients.  
 
    if ($alert_no>0) {
-      logme('X',"There are $alert_no changes in watched files and directories'"); 
-       if(length($ChangedWatchedLst)>80){
-          $ChangedWatchedLst=substr($ChangedWatchedLst,0,100);
-          $last_blank=rindex($ChangedWatchedLst,' ');
-          $ChangedWatchedLst=substr($ChangedWatchedLst,0,$last_blank).' ... ';
-       }   
-      ($EMAIL_LIST) && `cat $LOG_FILE | mail -s "$HOSTNAME Dirhist report about $alert_no changes in $ChangedWatchedLst" "$EMAIL_LIST"`;
+      logme('I',"There are $alert_no changes in watched files and directories'"); 
+      logme('I',"The list of changed files: $ChangedWatchedLst"); 
+      if(length($ChangedWatchedLst)>80){
+         $ChangedWatchedLst=substr($ChangedWatchedLst,0,100);
+         $last_blank=rindex($ChangedWatchedLst,' ');
+         $ChangedWatchedLst=substr($ChangedWatchedLst,0,$last_blank).' ... ';
+      }   
+      unless($EMAIL_LIST) {
+         $EMAIL_LIST='root';
+      }
+      `cat $LOG_FILE | mail -s "$HOSTNAME Dirhist report about $alert_no changes in $ChangedWatchedLst" "$EMAIL_LIST"`;
+      logme('X','');
    } 
    exit $alert_no; 
   
@@ -334,9 +339,8 @@ my $TarballName=substr($SelectedDir,1); # name without extention .tar
       `tar cvf $ArchiveDir/$TarballFname -C $SelectedDir . `;
       return;
    }
-   logme('I',"Baseline used: $ArchiveDir/$TarballFname");
+   logme('W','Baseline used: '.`ls -l $ArchiveDir/$TarballFname`);
   
-
 #
 # Directory changes database
 # Currently is done using tar, as tar has comparison option. But can be done using a different archiver.
@@ -380,10 +384,10 @@ my $changed_watched_file_no=0; #total number of changed files classified as "wat
       }  
       
       if( exists( $$ref_watched_file{$file}) ){
-         logme('E',"Watched file $file_with_path changed $what_changed($file} ");        
+         logme('E',"Watched file $file_with_path changed: $what_changed{$file} ");        
          $is_changed=1;
       }elsif( $fpath && exists( $$ref_watched_dir{$fpath}) ){
-         logme('E',"File $file in watched directory $SelectedDir/$fpath changed");
+         logme('E',"File $file in watched directory $SelectedDir/$fpath changed $what_changed{$file} ");
          $is_changed=1;
       } 
       
@@ -426,7 +430,7 @@ my $changed_watched_file_no=0; #total number of changed files classified as "wat
          open (SYSDIFF, ">>$DiffDir/$diff_file.$today");
          print SYSDIFF "=== DIFFERENCES FOR '$file_with_path' dated $timestamp ===\n\nCurrent: $current_ls Previous: $previous_ls $diff\n\n===\n\n";
          close SYSDIFF;
-         ($is_changed) && diff2log("$file_with_path with following changes: $what_changed{$file}",$diff); # Report only for wantched files 
+         ($is_changed) && diff2log($file_with_path,$diff); # Report only for wantched files 
 
       }   
    } # foreach
@@ -450,7 +454,7 @@ my $changed_watched_file_no=0; #total number of changed files classified as "wat
 sub diff2log
 {
 my ($subject,$diff_string)=@_;
-   out("One way delta from diff for $subject");
+   out("One way delta extracted from diff file for $subject");
 my @diff=split(/\n/,$diff_string);    
    for( my $i=0;$i<@diff;$i++ ){
       if( substr($diff[$i],0,1) eq '>' || substr($diff[$i],0,1)=~/\d/ ){
@@ -649,7 +653,7 @@ my ($package, $filename, $lineno) = caller;
          next unless( $ercounter[$i] );
          $summary.=" ".substr('WEST',$i,1).": ".$ercounter[$i];
       } # for
-      ( scalar(@_)>1 ) && out($_[1],"\n\n=== MESSAGES SUMMARY $summary ===\n");
+      ( scalar(@_)>1 ) && out($_[1],"\n=== MESSAGES SUMMARY $summary ===\n");
       if( $ercounter[1] + $ercounter[2] ){
          out("$ermessage_db[1]\n") if $ercounter[1]>0; # reproduce all errors
          out("$ermessage_db[2]\n") if $ercounter[2]>0; # reproduce all severe errors 
