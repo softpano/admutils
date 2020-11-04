@@ -7,8 +7,11 @@ This project is about publishing of a set of written by me over the years sysadm
 
 ## History
 
-**Nov 05, 2020**  *dirhist* utility was posted. Provides the jistory of changes in one or several directories was posted on GitHub
-Designed to run from cron. Uses different, simpler approach than the etckeeper. Does not use GIT or any other version control system as they proved to be of limited use for sysadmin, unless there are multiple sysadmins on the server. Creates a daily new tar file for selected set of directories, for example  /etc /root, and /boot  Detects all "critical" changed file, diffs them with previous version, and produces report.
+**Nov 05, 2020**  *dirhist* utility was posted. Provides the history of changes in one or several directories.
+
+Designed to run from cron. Uses different, simpler approach than the etckeeper (and does not have the connected with the usage of GIT problem with incorrect assignment of file attributes when reconverting system files). 
+
+If it detects changed file it creates a new tar file for each analysedf directory, for example  **/etc**, **/root**, and **/boot**.  Detects changes in all "critical" files diffs them with previous version, and produces report.
 
 All information by default in stored in **/var/Dirhist_base**. Directories to watch and files that are considered important are configurable via two config files **dirhist_ignore.lst** and **dirhist_watch.lst** which by default are located at the root of **/var/Dirhist_base**  tree (as **/var/Dirhist_base/dirhist_ignore.lst** and
 **/var/Dirhist_base/dirhist_watch.lst** )
