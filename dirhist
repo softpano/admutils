@@ -1,0 +1,822 @@
+#!/usr/bin/perl
+#:: Comparison of tar files created fro selected directories with the actual content of the directory and creation of the history of changes
+#:: Useful for such directories as /etc/ when the server is managed by several admins. 
+#:: Also can be used for recovery.
+#
+#:: Copyright by Nikolai Bezroukov, 2010-2020 
+#:: Released under Perl Artisitic License
+#::
+#::
+#:: Options:
+#::   -b -- base  (name of the tar archive to use as a reference point)
+#::   -h -- this screen
+#::   -v -- verbosity level
+#::         0         -- no errors are displayed
+#::         1 or -v   -- only "serious errors" are displayed (default)
+#::         2 or -vv  -- only "serious errors" and "errors" are displayed
+#::         3 or -vvv -- "serious errors", "errors" and "warnings" are displayed
+#::
+#--- Development History
+#
+#++ Ver   Date         Who       Modification
+#++ ===   ==========   ========  =========================
+#++ 0.1   2010/03/11   BEZROUN   Initial implementation
+#++ 0.2   2010/03/26   BEZROUN   Autoupdate to Archive directory introduced
+#++ 0.3   2010/05/13   BEZROUN   subdirs are moved inside BASE_DIR
+#++ 0.4   2011/03/10   BEZROUN   primary_admin can contain server type ("me@here.com:PROD")
+#++ 0.5   2011/10/26   BEZROUN   key /root files included in comparison
+#++ 0.6   2014/05/05   BEZROUN   Exclusion of files reworked
+#++ 0.7   2014/05/22   BEZROUN   Critical files concept introduced. /etc/fstab is an example
+#++ 0.8   2014/11/26   BEZROUN   Reports completly reworked. Only in case of important files emails are send.
+#++ 0.81  2014/11/27   BEZROUN   Prefix ./ from files in changes report was eliminated but restored for extraction form tar archive
+#++ 0.82  2014/11/28   BEZROUN   Deleted files in /etc are now also reported
+#++ 0.83  2014/12/03   BEZROUN   Unable to extract file situation with tar archive is just reported, not abend the program
+#++ 0.84  2014/12/11   BEZROUN   Changed the list of separatly watched file. added /var/spool/cron/root
+#++ 0.85  2014/12/11   BEZROUN   Changes in logging and standartiuzation of logging infrastructure
+#++ 0.86  2015/05/07   BEZROUN   Boot directory is contolled.End of line is obligatory for a message
+#++ 0.87  2016/04/31   BEZROUN   Local storage moved to /var
+#++ 0.88  2017/04/14   BEZROUN   blkid.tab added to ignored files list
+#++ 0.89  2017/04/15   BEZROUN   set_utils changes destructive operations to echo if debug >=3
+#++ 0.90  2017/08/08   BEZROUN   Monitoring extended to multiple directories. Directories are now created with 700 permissions (just in case)
+#++ 0.91  2017/08/07   BEZROUN   removed baseline suffix from archives. It is useless
+#++ 0.92  2019/10/04   BEZROUN   Instead of cd $dir && tar option -C in tar is used. 
+#++ 1.00  2020/11/03   BEZROUN   Major rewrite. Code generalised for arbitraty set of directories.
+# ------------------------------------------ START --------------------------------------------
+   $debug=0;
+   $test_file='';
+   $VERSION='1.0'; ;
+   $SCRIPT_NAME='dirhist';
+   chomp($today=`date +"%y%m%d_%H%M"`);
+   $HOSTNAME=substr($ENV{'HOSTNAME'},0,rindex($ENV{'HOSTNAME'},'.'));   # we will always use short hostname in diagnistic messages
+   set_utils();
+   $HOME=$ENV{'HOME'};
+   
+ 
+#
+# Default Parameters
+# 
+   $EXCLUDED_FILES="$BASE/$SCRIPT_NAME".'_exclude.lst';
+   $WATCHED_FILES="$BASE/$SCRIPT_NAME".'_watch.lst';
+   $WATCHED_DIRS='';
+  
+   @CONFIG_LOCATIONS=("$HOME/.config/$SCRIPT_NAME.conf", "$HOME/$SCRIPT_NAME.conf","/etc/$SCRIPT_NAME.conf"); 
+   for( $i=0; $i<@CONFIG_LOCATIONS; $i++ ){
+      next unless( -f $CONFIG_LOCATIONS[$i] );
+      get_config($CONFIG_LOCATIONS[$i]);
+      last;
+   }
+   if( $WATCHED_DIRS ){
+      $WATCHED_DIR_LIST=split(/,?\s+/,$WATCHED_DIRS)
+   }   
+#
+# Initialization for logme
+#
+   @ermessage_db={}; # accumulates messages for each category (warning, errors and severe errors)
+   @ercounter=(0,0,0,0);
+   logme('V',3,3); # initialize logme so that it can be used in options 
+   
+#
+# Set up BASE and LOG_DIR
+#
+   $BASE='/var/'.ucfirst($SCRIPT_NAME).'_base';
+   $LOG_DIR="$BASE/Logs"; # used for opening SYSLOG
+   `mkdir -p -m 700 $LOG_DIR` unless ( -d "$LOG_DIR" );
+   $LOG_RETENTION_PERIOD=365;
+#
+# Options
+#
+   
+   getopts("c:d:v:hl:m:e:w:x",\%options);
+   if ( exists($options{'l'}) ) {
+      # SYSLOG
+      $LOG_DIR=$options{'l'};
+      if( $LOG_DIR=~/^(.+)\:(\d+)/ ){
+          $LOG_DIR=$options{'l'}=$1;
+          $LOG_RETENTION_PERIOD=$2;
+      }   
+      `mkdir -p -m 700 $LOG_DIR` unless ( -d "$LOG_DIR" );      
+   }
+      
+   banner(ucfirst($SCRIPT_NAME)." -- Syncronization of user accouns for classic Unix authentication files), Version $VERSION",$LOG_DIR,$LOG_RETENTION_PERIOD);
+   standard_options(); 
+   
+   if( $debug>0 ){
+      out("The program is working in debug mode $debug");
+      logme('V',3,3); 
+      autocommit("$HOME/Archive",$SCRIPT_NAME,0)
+   }else{
+      logme('V',3,3);
+   }
+   if( exists($options{'e'}) ){
+      $distribution_list=$options{'s'};
+   }
+   
+   if( exists($options{'x'}) ){  
+      $EXCLUDED_FILES=$options{'x'};
+      unless (-f $EXCLUDED_FILES){
+         abends("File $EXCLUDED_FILES specified in option -x does not exists");
+      }
+   }
+   
+   if( exists($options{'w'}) ){  
+      $WATCHED_FILES=$options{'w'};
+      unless (-f $WATCHED_FILES){
+         abends("File $WATCHED_FILES specified in option -x does not exists");
+      }
+   }   
+   
+   if (scalar($ARGV)>0) {
+      if ( -d $ARGV[0]){
+         $WATCHED_DIR_LIST=@ARGV
+      }
+      $EXCLUDED_FILES=$WATCHED_FILES='';      
+   }   
+#
+# Mail addresses
+#
+   unless(defined($distribution_list)){
+     $primary_admin=get_primary_admin(); # try to get it iether from /etc/passwd UID 0 field or /root/primary_admin 
+     mail_distrib_list($primary_admin); # populate mail distribition list with the first address. 
+   }  
+
+#
+# Save previous message
+#
+   if (-f "$LOG_DIR/message") {
+      $filestamp=`date -r  "$LOG_DIR/message" +"%y%m%d_%H%M"`; chomp($filestamp);
+      `mv $LOG_DIR/message $LOG_DIR/message.$filestamp`;
+   }
+
+#
+# Exclusions should be prefixed by the directory in question. Comparison is via index function, not via regex
+# as file names contain dots and possibly other regex characters.
+#
+        
+   if( $EXCLUDED_FILES && -f $EXCLUDED_FILES){
+          open( SYSIN,'<',$EXCLUDED_FILES ) || abend("Can't open the file $BASE/files2report.lst for reading");
+      while($line=<SYSIN> ){
+         next if substr($line,0,1) eq '#';
+         chomp($line);
+         $line=$1 if $line=~/^(.*\S)\s+$/;         
+         $cur_dir=$line; # first watched section 
+         last;
+      }
+      $line=<SYSIN>;
+      while($line ne undef  ){                
+         chomp $line;         
+         if( $line=~/^\S/ ){
+            next if substr($line,0,1) eq '#';                          
+            chomp($line);
+            $line=$1 if $line=~/^(.*\S)\s+$/; # line has trailing whitescpace
+            $cur_dir=$line;
+            $line=<SYSIN>;
+            next;
+         }  
+              
+         while($line=~/\s+\S/ ){
+            # process continuation line. It always start with white space chanrater (\s)
+            if( $line=~/^\s+(.*\S)\s*$/ ){
+              $line=$1;
+            }
+            next unless($line);
+            @entries=split(/\:/,$line);
+            for($i=0; $i<@entries; $i++ ){
+               $element=$entries[$i];
+               $element_with_path="$cur_dir/$element";
+               if ( substr($element,-1,1) eq '/' ){
+                 if ( -d $element_with_path){ 
+                    $IGNORED_DIR{$element_with_path}=1; # directories should have traling slash to distinguish them from files. 
+                 }else{
+                    logme('S',"The directory $element_with_path that you want to ignore does not exist on the server or is a symlink\n");
+                 }   
+               }else{
+                  if( -f $element_with_path){ 
+                    $IGNORED_FILE{$element_with_path}=1;
+                  }else{
+                    logme('S',"The file $element_with_path that you want to watch does not exist on the server or is a symlink \n");
+                  } 
+               }            
+            }
+            $line=<SYSIN>;
+            last if ($line eq undef);
+         }
+     } #while;
+   }else{
+      logme('E',"No excluded files is used in this run\n");     
+   }  
+#
+# Selected specially watched files -- IMPORTANT file list
+#
+   if( $WATCHED_FILES && -f $WATCHED_FILES){
+      open(SYSIN,'<',$WATCHED_FILES) || abend("Can't open the file $BASE/files2report.lst for reading");
+      $watch_no=0;
+      while($line=<SYSIN> ){
+         next if substr($line,0,1) eq '#';
+         chomp($line);
+         $line=$1 if $line=~/^(.*\S)\s+$/;         
+         $WATCHED_DIR_LIST[0]=$cur_dir=$line; # first watched section 
+         last;
+      }
+      $line=<SYSIN>;
+      while($line ne undef  ){                
+         chomp $line;         
+         if( $line=~/^\S/ ){
+            next if substr($line,0,1) eq '#';
+            $WATCHED_DIR_LIST[$watch_no++]=$cur_dir;# watched directory line
+            $WATCHED_FILE{$cur_dir}=$ref_watched_file;
+            $WATCHED_DIR{$cur_dir}=$ref_watched_dir;                   
+            chomp($line);
+            $line=$1 if $line=~/^(.*\S)\s+$/; # line has trailing whitescpace
+            $cur_dir=$line;
+            $line=<SYSIN>;
+            next;
+         }  
+         {
+            my (%CRITICAL_DIR,%CRITICAL_FILE);       
+            while($line=~/\s+\S/ ){
+               # process continuation line. It always start with white space chanrater (\s)
+               if( $line=~/^\s+(.*\S)\s*$/ ){
+                 $line=$1;
+               }
+               next unless($line);
+               @entries=split(/\:/,$line);
+               for($i=0; $i<@entries; $i++ ){
+                  $element=$entries[$i];
+                  if ( substr($element,-1,1) eq '/' ){
+                    if ( -d "$cur_dir/$element"){ 
+                       $CRITICAL_DIR{$element}=1; # directories should have traling slash to distinguish them from files. 
+                    }else{
+                       logme('S',"The directory $cur_dir/$element that you want to watch does not exist on the server or is a symlink\n");
+                    }   
+                  }else{
+                     if( -f  "$cur_dir/$element"){ 
+                       $CRITICAL_FILE{$element}=1;
+                     }else{
+                       logme('S',"The file $cur_dir/$element that you want to watch does not exist on the server or is a symlink \n");
+                     } 
+                  }            
+               }
+               $line=<SYSIN>;
+               last if ($line eq undef);
+            }
+            $ref_watched_file=\%CRITICAL_FILE;
+            $ref_watched_dir=\%CRITICAL_DIR;  
+         }
+      } #while
+   }else{
+      logme('E',"No watched files is used in this run\n");     
+   }      
+  
+   
+#
+# MAIN LOOP
+#   
+my $changelist;
+   $alert_no=0; # number of changes important files
+   for ($watched_dir_no=0; $watched_dir_no<@WATCHED_DIR_LIST; $watched_dir_no++ ){
+      $DIR=$WATCHED_DIR_LIST[$watched_dir_no];
+      $ref_watched_file=$WATCHED_FILE{$DIR}; # list of critical files
+      $ref_watched_dir=$WATCHED_DIR{$DIR}; # list of critical-dirs
+      $rc=process_dir(); # now process this directory
+      $alert_no+=$rc;
+   }
+   close SYSLOG; # log 
+   close SYSMES; # this is email message 
+   if ($alert_no>0) {
+      logme('X',"There are changes in watche directories'"); 
+   } 
+   exit $alert_no; 
+  
+sub process_dir
+{ 
+my @changed_files;
+my %what_changed;
+my $report; # report about ignored files (names only))
+#
+# Set Directories
+#
+  $DIR_STORAGE=substr($DIR,1); # delete '/'
+  $DIR_STORAGE=~tr[/][_];
+  $BASE_DIR="$BASE/$DIR_STORAGE/Archives";
+  $DIFF_DIR="$BASE/$DIR_STORAGE/Diffs";
+  $HIST_DIR="$BASE/$DIR_STORAGE/History";
+  mkdirs($BASE_DIR,$DIFF_DIR,$HIST_DIR);   
+    
+
+#
+# Baseline archive name
+#
+   if ( substr($DIR,0,1) ne '/' ){
+      abend(__LINE__,"Not an absolute name for the directory\n");
+   }
+my $BASELINE_PREFIX=substr($DIR,1);
+   $BASELINE_PREFIX =~ tr/\//^/;
+my $BASELINE_ARCHIVE="$BASELINE_PREFIX.tar";
+
+   unless ( -f "$BASE_DIR/$BASELINE_ARCHIVE" ) {
+      logme('E',"Baseline does not exist: creating new at $BASE_DIR/$BASELINE_ARCHIVE\n");
+      `tar cvf $BASE_DIR/$BASELINE_ARCHIVE -C $DIR . `;
+      return;
+   }
+   logme('I',"Baseline used: $BASE_DIR/$BASELINE_ARCHIVE");
+  
+
+#
+# Directory changes database
+# Currently is done using tar, as tar has comparison option. But can be done using a different archiver.
+
+   @changed_files=`tar -df $BASE_DIR/$BASELINE_ARCHIVE -C $DIR  2>&1`;
+
+#
+# process them one-by-one, filtering those file that you do not care about (noise)
+#
+   foreach $file (@changed_files) {
+      if (substr($file,0,4) eq 'tar:') {
+          $file=substr($file,5);
+      }
+      ($file,$what)=split(/\:\s+/,$file,2);
+      chomp($what);
+      if (index($what,"Cannot stat")> -1) {
+         add_to_email_message("$file: $what","$file was removed ($what)\n\n");
+         next;
+      }
+      ($debug) && print "changed: $file,$what\n";
+      $file=~s/^\.\///; # remove prefix
+      if (exists($what_changed{$file}) ) {
+         $what_changed{$file} .= ", $what";
+      } else {
+         $what_changed{$file} = "$what";
+      }
+   }
+   return 0 if (scalar(@changed_files)==0); # does not make any sense to process this directory further
+   
+   $changed=0;
+   foreach $file ( keys %what_changed ){
+      $file_with_path=$DIR.'/'.$file;
+      next if exists($IGNORED_FILE{$file_with_path});
+      $last_slash=rindex($file,'/');
+      if( $last_slash > -1) {
+         $fpath=substr($file,0,$last_slash+1);
+         next if exists($IGNORED_DIR{"$DIR/$fpath"});
+      }else{
+         $fpath='';
+      }   
+      if( exists( $$ref_watched_file{$file}) ){
+         logme('S',"Watched file $file_with_path changed");
+         $changed++;
+      }elsif( $fpath && exists( $$ref_watched_dir{$fpath}) ){
+         logme('S',"File $file in watched directory $DIR/$fpath changed");
+         $changed++;
+      }  
+       
+      #
+      # Update history from the tar file
+      #      
+      if( -e "$HIST_DIR/$file" ){
+         chomp($timestamp=`date -r $HIST_DIR/$file "+%y%m%d"`);
+         shell("mv $HIST_DIR/$file $HIST_DIR/$file.$timestamp");
+      }
+      shell(qq(cd $HIST_DIR && tar xvf $BASE_DIR/$BASELINE_ARCHIVE "./$file"));
+      unless ( -e "$HIST_DIR/$file" ) {
+         logme('S',"INTERNAL: Unable to extract file ./$file from $BASE_DIR/$BASELINE_ARCHIVE");
+         next;
+      }
+      
+      $diff='';
+      if( index(`file $file_with_path`,'text')>-1 ) {
+         $diff=`$DIFF $HIST_DIR/$file $file_with_path`;
+         chomp($diff);
+         next unless ($diff);
+         #
+         # There are differences
+         #
+         ($debug) && print "$file was changed\n";
+         $current_ls=`$LS -l  $file_with_path`;
+         $previous_ls=`$LS -l $HIST_DIR/$file`;
+         $report .= "\n$file_with_path $what_changed{$file}\n\t$current_ls\n\t$previous_ls";         
+         $diff_file=$file;
+         $diff_file =~ tr[\\][^];
+         chomp($timestamp=`date -r $file_with_path "+%y%m%d"`);
+         open (SYSDIFF, ">>$DIFF_DIR/$diff_file.$today");
+         print SYSDIFF "=== DIFFERENCES FOR '$file_with_path' dated $timestamp ===\n\nCurrent: $current_ls Previous: $previous_ls $diff\n\n==============================\n\n";
+         close SYSDIFF;
+      }   
+   }
+   if ($changed==0){
+      logme('I',"No meaningful changes in content of $DIR detected\n");
+   } else { 
+      add_to_email_message("$what_changed{$file}",$diff);
+      $changelist.=" $DIR/$file";
+      #
+      # Move tar archive to new name with time stamp (creation date) and create a new tar archive
+      #
+      chomp($timestamp=`date -r $BASE_DIR/$BASELINE_ARCHIVE "+%y%m%d_%H%M"`);
+      shell("mv $BASE_DIR/$BASELINE_ARCHIVE $BASE_DIR/$BASELINE_PREFIX$timestamp.tar && gzip $BASE_DIR/$BASELINE_PREFIX$timestamp.tar");
+      ($debug==0) && `tar cvf $BASE_DIR/$BASELINE_ARCHIVE -C $DIR .`; # renew baseline only for debug=0    
+      add_to_email_message("report for $HOSTNAME===\n\n$report\n");    # send report about ignored files  to email message        
+   }
+   return $changed;
+} # process_dir  
+
+
+#
+# Adds to $LOG_DIR/message
+#
+# Arg1 -- message
+# Arg2 -- list of tags (pretty elegant idea ;-)
+# Arg3..ArgN -- for each tag in tag stroing this is iether file (if tag is f)
+#           or string (if tag is 's') that should be inlcuded in the message
+sub add_to_email_message
+{
+my $subject=shift;
+my $message_string=shift;
+   # email message should be cumulative for all watched directories
+   unless ($message_opened) {
+      open(SYSMES,'>>',"$LOG_DIR/message");
+      $message_opened=1; # we need to open file only once
+   }   
+   print SYSMES "\n==== $subject =====\n";
+   $tag=substr($message_string,$tag,1);
+   if ($tag eq '<') {
+      $file=substr($tag,1);
+      if (-e $file) {
+         open(SYSIN, '<',$file);
+         while(<SYSIN>) {
+            print SYSMES $_;
+         }
+         close SYSIN;
+      } # if
+   } else  {
+      print SYSMES "$message_string\n";
+   }
+  
+} # add_to report
+
+sub report_problem {
+my $subject;
+   $subject=$_[0];
+   chomp($subject); # you need to clese the file before sending it
+   `cat $LOG_DIR/message $LOG_FILE | mail -s "$HOSTNAME $subject" "$distribution_list"`;
+}
+
+
+#
+# Save file with original timestamp as extension
+#
+sub savefile 
+{
+my $filepath=$_[0];
+my $TARGET_DIR=$_[1];
+my $filename=$_[2];
+my $filestamp;
+    if (length($filename)==0 || length($filepath)==0 || length($TARGET_DIR)==0) {
+       abend(__LINE__,"Wrong arguments to savefile: filepath=$filepath,TARGET_DIR=$TARGET_DIR,filename=$filename\n"); 
+    }
+   if (-e "$TARGET_DIR/$filename") {
+      $filestamp=`date -r "$TARGET_DIR/$filename" +"%y%m%d_%H%M"`; chomp($filestamp);
+     shell("$MV $TARGET_DIR/$filename $TARGET_DIR/$filename.$filestamp");
+   }
+   shell("$CP -p $filepath $TARGET_DIR"); # save latest version in HISTORY with org timestamp and attributes. 
+} # savefile
+
+sub get_primary_admin
+# slurps /root/primary_admin and extracts email adress from it. If does not exist tries /etc/passwd root record. 
+{
+   if ( -e "/root/primary_admin" ) {
+     chomp($primary_admin=`cat /root/primary_admin`);
+     if( index($primary_admin,':')>-1) {
+       ($primary_admin, undef)=split(/:/,`cat /root/primary_admin`,2);
+     }
+     return $primary_admin;
+   }else{
+     $primary_admin=`grep -P '^root' /etc/passwd`;
+     my @F=split(/:/,$primary_admin);
+     $primary_admin=$F[4];
+     if( index($primary_admin,'@')>=1 ){
+        return $primary_admin;
+     }else{
+        logme('S','Unable to detect email address of primary administrator for the server. Please specify it in option -a, or in the file /root/primary_admin'); 
+        exit 255;
+     }
+   }  
+}
+#================================================================
+# Standard subroutines -- version 3.00 (Dec 11, 2014)
+#================================================================ 
+
+sub mail_distrib_list
+{
+  my $server_info;
+  if ($debug) {
+      $distribution_list=$primary_admin;
+      return;
+  }
+  $distribution_list.=$_[0];
+    
+} #  mail_distrib_list  
+  
+sub abs 
+{
+   return -$_[0] if ($_[0] <0 );  
+   return $_[0];
+}
+
+sub shell 
+{
+   if ($debug) { logme('I',"command: $_[0]\n");}
+   `$_[0]`;
+}
+sub set_utils
+{
+  $LS='/bin/ls';
+  $MAIL='/bin/mail';
+  #$CAT='/bin/cat';
+  $MV='/bin/mv';
+  $CP='/bin/cp';
+  $DIFF='/usr/bin/diff';
+  #$LAST='/usr/bin/last'; 
+  #$GREP='/bin/grep';
+  $MAIL='/bin/mail';
+  if ($debug>=3) {
+     $MAIL='echo';
+     $MV='echo';
+     $CP='echo';
+     $MAIL='echo';
+  }  
+  
+}
+
+# ===================================================================
+# softpano.pm -- Set of standard softpanorama subroutines for logging
+# ===================================================================
+sub autocommit
+{
+# parameters
+my ($archive_dir,$use_git)=@_; #Script name can be with ewxprentionpl or without. 
+#
+#  Local vars
+#
+my $build_timestamp;
+my $script_delta=1;
+my $file=( ($last=index($0,'/'))>-1 ) ? substr($0,$last+1):$0;
+      ( ! -d $archive_dir ) && `mkdir -p $archive_dir`;
+      if(  -f "$archive_dir/$file"  ){
+         if( (-s $0 ) == (-s "$archive_dir/$file")   ){
+            `diff $0 $archive_dir/$file`;
+            $script_delta=( $? == 0 )? 0: 1;
+         }
+         if( $script_delta ){
+            chomp($build_timestamp=`date -r $archive_dir/$file +"%y%m%d_%H%M"`);
+            `mv $archive_dir/$file $archive_dir/$file.$build_timestamp`;
+         }
+      }
+      if(  $script_delta){
+         `cp -p $0 $archive_dir/$file`;
+          ($use_git) && `cd $archive_dir && git commit $archive_dir/$file`; # autocommit
+      }
+} # autocommit
+sub get_config
+{
+my $config_file=$_[0];
+my @conf=`cat $config_file`;
+my ($line,$i);
+   for( $i=1; $i<@conf; $i++ ){
+      chomp($line=$conf[$i]);
+      if( substr($line,0,1) eq '#' ){
+         $conf[$i]='';
+         next;
+      }
+      if( $line eq '' || $line=~/^\s*$/ ){
+         $conf[$i]=''; # emply line
+         next;
+      }
+      if( $line=~/^\s*(.*\S)\s*$/ ){
+         $line=$1;
+      }
+      if( $line=~/^(\w+)\s*=\s*['"](.*?)['"]/ ){
+         if( $2=~tr/'"// ){
+            die(qq(Wrong value $1 in line $i of config file $config_file -- string parameter can't contain ' or "" within its value.));
+         }
+         $conf[$i]='$'."$1='$2'";
+      }elsif( $line=~/^(\w+\s*=\s*\d+)/ ){
+         $conf[$i]='$'."$1";
+      }else{
+         print "Line $i ($line) in config file $config_file  is not recognizable configuration statement and was skipped\n";
+      }
+   }
+   if( $debug ){
+      print join("\n",@conf),"\n";
+   }
+   for( $i=1; $i<@conf; $i++ ){
+      next unless($conf[$i]);
+      eval($conf[$i]);
+   }
+   return 0;
+} # get_config
+sub standard_options
+{
+   helpme() if exists $options{'h'};
+   if( exists($options{'d'}) ){
+      if( $options{'d'} =~/^(\d)\:(.*)$/ ){
+         $debug=$1;
+         $test_file=$2;
+      }elsif( $options{'d'}=~/\d/ ){
+         $debug=$options{'d'};
+      }else{
+         die("Wrong value of option -d ($options{'d'}).Should be iether single digit of digit and test user like -d '2:frankj'\n\n");
+      }   
+   }    
+  
+   if( exists $options{'v'} ){
+      if(  $options{'v'}>=0 && $options{'v'}<=3){
+         logme('V',$options{'v'},$options{'v'});
+      }else{
+         logme('E','The value of option v (number of parallel transfers) is outside the range 0..3. 3 assumed');
+         logme('V',3,3);
+      }
+   }
+
+   if(  exists  $options{'c'}  ){
+      $config_file=$options{'c'};
+      if( -f $config_file && -r $config_file ){
+         get_config($config_file);
+      }else{
+         abend("Config file $config_file does not exists, or does not have read permissions for the user\n\n");
+      }
+   }
+}
+
+sub logme
+# logme: Standard SP package diagnostic messages generator. Version 2.8 (Nov 1, 2020)
+{
+my ($package, $filename, $lineno) = caller;
+# two special types messages 'V' -- set verbosity and 'X' print summary. 
+   if( $_[0] eq 'V' ){
+      # set verbosity NOTE: Call logme('V') simply prints the content of the buffer. Useful in processing of options for defering messages until LOR_DIR is set. 
+      $min_msglevel1=length("WEST")-$_[1]-1; # verbosity 3 is max and means cut level is 4-3-1=0  -- the index corresponding to code 'W'
+      $min_msglevel2=length("WEST")-$_[2]-1; # same for log only (like in MSGLEVEL in mainframes ;-)
+      return;
+   }elsif( $_[0] eq 'X' ){
+      my $summary=''; # string which contains stat of how many  messages of each type were generated (including supressed).       
+      for( my $i=0; $i<=length('WEST'); $i++ ){
+         next unless( $ercounter[$i] );
+         $summary.=" ".substr('WEST',$i,1).": ".$ercounter[$i];
+      } # for
+      ( scalar(@_)>1 ) && out($_[1],"\n\n=== MESSAGES SUMMARY $summary ===\n");
+      if( $ercounter[1] + $ercounter[2] ){
+         out("$ermessage_db[1]\n") if $ercounter[1]>0; # reproduce all errors
+         out("$ermessage_db[2]\n") if $ercounter[2]>0; # reproduce all severe errors 
+      }
+      return;
+   } #if
+#
+# Now let's process "normal message", which should have W,E,S, or T severity code.
+#
+my $ercode=uc(substr($_[0],0,1)); # Parameter 1 -- message code. It can be several letters long, not only a single letter
+# my $ersuffix=(length($_[0])>1) ? substr($_[0],1,1):''; # suffix of error code currently is unused. 
+chomp( my $message=$_[1]); #Parameter 2 -- text of the message (see ercode -- Parameter 1 prcessed below) 
+     $message="$SCRIPT_NAME\-$lineno$ercode: $message"; # Form diagnostic message with error code, line number and the text of the message
+my   $severity=index("WEST",$ercode);
+     if( $severity==-1){
+         out($message); # informational 'I' messages and messages with wrong error code. 
+         return;
+     }
+     $ercounter[$severity]++; # Increase messages counter for given severity (supressed by verbosity setting messages are counted too)
+     return if(  $severity<$min_msglevel1 && $severity<$min_msglevel2 ); # no need to process if this is lower then both msglevels
+#----------------- Error history -------------------------
+      if( $severity > 0 ){ $ermessage_db[$severity] .= "\n\n$message";} # this DB actually can serve as a buffer during processing of options
+#--------- Message printing and logging --------------
+      # We treat separatly verbosity for log and console.
+      # Out of four legit error codes W,E,S and T, only T is unsupressable         
+      # $min_msglevel2 defines writing to SYSLOG. 3 (default) means all (Warning, Errors and Severe errors) to be printed
+      if( $severity==2 ){
+          $message=("=" x length($message))."\n".$message."\n".("=" x length($message))."\n";
+      }    
+      ($severity >= $min_msglevel1) && print STDERR "$message\n"; # warnings and errors
+      ($severity >= $min_msglevel2) && print SYSLOG "$message\n";
+ } # logme
+
+sub out
+#direct output of lines suppled as parameters
+#Unlike logme it can accept multipile lines. Use out('') for spaceline.
+{
+   for( my $i=0; $i<@_; $i++ ){
+      print STDERR "$_[$i]\n";
+      print SYSLOG "$_[$i]\n";
+   }
+} # out
+
+sub abend
+#print diagnostic and terminate the script
+{
+my $message;
+my ($package, $filename, $lineno) = caller;
+   $message="$SCRIPT_NAME-T$lineno $_[0]. Exiting...\n\n";
+   out($message); # Syslog might not be available but STDERR always is 
+   exit 255;
+} # abend
+
+sub banner {
+#print banner and clean LOG_DIR
+my $title=$_[0]; 
+my $LOG_DIR=$_[1];
+my $LOG_RETENTION_PERIOD=$_[2];
+my $rc=( -d $LOG_DIR ) ? `find $LOG_DIR -name "*.log" -type f -mtime +$LOG_RETENTION_PERIOD -delete` : mkdir($LOG_DIR,700) ; # cleanup
+   chomp(my $timestamp=`date +"%y%m%d_%H%M"`);
+   $LOG_FILE="$LOG_DIR/$SCRIPT_NAME.$timestamp.log";
+   open(SYSLOG,'>',$LOG_FILE) || die("Fatal error: unable to open $LOG_FILE");
+   chomp($timestamp=`date "+%y/%m/%d %H:%M"`);   
+   chomp( my $BUILD_DATE=`date -r $0 +"%y%m%d_%H%M"`);
+   $title.="( Build $BUILD_DATE ). Date: $timestamp";
+   out('',$title,"Logs are at $LOG_FILE. Type -h for help.",('=' x length($title)),'');
+}
+
+sub mkdirs
+# sub mkdirs: create multiple directories using option -p
+{
+   foreach( @_ ){
+      next if(  -d $_);
+      system("mkdir -p $_");
+      abend("Can't create directory $_") unless ( -d $_ );
+   }
+}
+sub helpme
+{
+   open(SYSHELP,'<',$0);
+   while($line=<SYSHELP>) {
+      if ( substr($line,0,3) eq "#::" ) {
+         print substr($line,3);
+      }
+   } # for
+   close SYSHELP;
+   while(<DATA>){
+      print " $_";
+   } # while
+   exit 0;
+}
+sub getopts
+{
+my ($options_def,$options_hash)=@_;
+my ($first,$rest,$pos,$cur_opt);
+   while(@ARGV){
+      $cur_opt=$ARGV[0];
+      last if( substr($cur_opt,0,1) ne '-' );
+      if(  $cur_opt eq '--'){
+          shift @ARGV;
+          last;
+      }
+      $first=substr($cur_opt,1,1);
+      $pos = index($options_def,$first);
+      if( $pos==-1){
+         warn("Undefined option -$first skipped without processing\n");
+         shift(@ARGV);
+         next;
+      }
+      $rest=substr($cur_opt,2);
+      if( $pos<length($options_def)-1 && substr($options_def,$pos+1,1) eq ':' ){
+         # option with parameters
+         if( $rest eq ''){
+           shift(@ARGV); # get the value of option
+           unless( @ARGV ){
+              warn("End of line reached for option -$first which requires argument\n");
+              $$options_hash{$first}='';
+              last;
+           }
+           if(   $ARGV[0] =~/^-/ ){
+               warn("Option -$first requires argument\n");
+               $$options_hash{$first} = '';
+           }else{
+               $$options_hash{$first}=$ARGV[0];
+               shift(@ARGV); # get next chunk
+           }
+         }else{
+            #value is concatenated with option like -ddd
+            if( ($first x length($rest)) eq $rest ){
+               $$options_hash{$first} = length($rest)+1;
+            }else{
+               $$options_hash{$first}=$rest;
+            }
+            shift(@ARGV);
+         }
+      }else {
+         $$options_hash{$first} = 1; # set the option
+         if(  $rest eq ''){
+            shift(@ARGV);
+         }else{
+            $ARGV[0] = "-$rest"; # there can be other options without arguments after the first
+         }
+      }
+   }
+}
+__DATA__
+The probrams creates a directory (the default is /var/Dirhist_base ) and a subdirectory for each watched directories in it.
+
+As this utility normally runs from cron the excluded and  eatched fioela re specified in two files
+  
+  /var/Dirhist_base/dirhist_ignore.lst 
+  /var/Dirhist_base/dirhist_watch.lst
+  
+Those can be changed via the configuration file via optiox -x and -w  
+
+For a test run on a certain directory you can specify the directory (or serveral directories) is argumnents to the program
+in this case no excluded files or watched files can be specified becuase they contain the list directories in thie own right. 
