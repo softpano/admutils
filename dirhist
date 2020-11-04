@@ -47,7 +47,7 @@
    $VERSION='1.0'; ;
    $SCRIPT_NAME='dirhist';
    chomp($today=`date +"%y%m%d_%H%M"`);
-   $HOSTNAME=substr($ENV{'HOSTNAME'},0,rindex($ENV{'HOSTNAME'},'.'));   # we will always use short hostname in diagnistic messages
+   chomp($HOSTNAME=`hostname -s`);   # we will always use short hostname in diagnistic messages
    set_utils();
    $HOME=$ENV{'HOME'};
    
