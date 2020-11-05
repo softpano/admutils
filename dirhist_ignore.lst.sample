@@ -1,3 +1,4 @@
+# List of files and directories to ignore 
 /etc
    mtab:adjtime:aliases.db
    blkid/blkid.tab:blkid/blkid.tab.old      

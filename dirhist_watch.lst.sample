@@ -1,3 +1,4 @@
+# List of watched directories with critical files and directories in each 
 /root
      .bash_profile:.bashrc:.functions:.aliases:.mc/hotlist 
      bin/:Config/
@@ -9,7 +10,6 @@
      nsswitch.conf:redhat-release:mc/mc.menu
      init.d/:profile.d/:yum.repos.d/:sysconfig/:cron.d/:cron.daily/:cron.weekly/:cron.monthly/:ntp/:profile.d/ 
      rear/:samba/:security/:skel/:ssh/:xinetd.d/
-/var/spool/mail
-     root
+#/var/spool/mail
+#     root
 /var/spool/cron
-     /root

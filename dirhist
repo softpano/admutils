@@ -4,14 +4,14 @@
 #:: and as the generations of each individual files changed in the particular directory.  
 #::
 #:: Copyright by Nikolai Bezroukov, 2010-2020 
-#:: Released under Perl Artisitic License
+#:: Released under Perl Artistic License
 #::
-#:: Designed to be run from cron Daily or hour invocations create the history of changes maked in the partiuclat directory 
+#:: Designed to be run from cron Daily or hour invocations create the history of changes marked in the particular directory 
 #:: which is helpful for a forensic investigation. The classic example is actions of multiple sysadmin on /etc/files. 
 #:: It was actually written after one such SNAFU happened about 10 years ago. 
 #:: 
-#:: Also can be used for recovery of condifugratuion files. 
-#:: For example, when you accidentally proporate authentiation related files (passwd, groups, shadow) from RHEL6 to RHEL 7. 
+#:: Also can be used for recovery of configuration files. 
+#:: For example, when you accidentally propagate authentication related files (passwd, groups, shadow) from RHEL6 to RHEL 7. 
 
 #:: Invocation
 #::    dirfile <options> [<directory>]
@@ -26,11 +26,12 @@
 #::         1 or -v   -- only "serious errors" are displayed (default)
 #::         2 or -vv  -- only "serious errors" and "errors" are displayed
 #::         3 or -vvv -- "serious errors", "errors" and "warnings" are displayed
-#::   -x file -- absolute path to configuration fiels with files and subdirectories to ignore
-#::   -w file --  absolute path to configuration files with files and subdirectories to wantch 
-#::   -e email -- email of list of emails to remail report if one of weatched files was changed. 
+#::   -x file -- absolute path to configuration fiels with files and subdirectories to ignore (default is the first in the list /var/Dirhist_base/dirhist_ignore.lst )
+#::   -w file -- absolute path to configuration files with files and subdirectories to watch  (default is the first in the list /var/Dirhist_base/dirhist_watch.lst ) 
+#::   -e email -- the list of emails (separated by comma) to email report, if any of the watched files was changed.  
+#::               Default is picked up as the first line of /root/primary_admin file, if it exists. 
 #::
-#--- Development History
+#--------------- Development History -----------------------------------------------------------------------------------
 #
 #++ Ver   Date         Who       Modification
 #++ ===   ==========   ========  =========================
@@ -56,6 +57,7 @@
 #++ 0.92  2019/10/04   BEZROUN   Instead of cd $SelectedDir && tar option -C in tar is used. 
 #++ 1.00  2020/11/03   BEZROUN   Major rewrite. Code generalised for arbitraty set of directories.
 #++ 1.10  2020/11/04   BEZROUN   Logic and diagnistics improved. 
+#++ 1.11  2020/11/05   BEZROUN   Error with processing comments in config files fixed.  
 # ------------------------------------------ START --------------------------------------------
    $debug=0;
    $test_file='';
@@ -176,7 +178,10 @@
       while($line ne undef  ){                
          chomp $line;         
          if( $line=~/^\S/ ){
-            next if substr($line,0,1) eq '#';                          
+            if( substr($line,0,1) eq '#'){
+               $line=<SYSIN>;
+               next;
+            }                          
             chomp($line);
             $line=$1 if $line=~/^(.*\S)\s+$/; # line has trailing whitescpace
             $cur_dir=$line;
@@ -232,7 +237,10 @@
       while($line ne undef  ){                
          chomp $line;         
          if( $line=~/^\S/ ){
-            next if substr($line,0,1) eq '#';
+            if( substr($line,0,1) eq '#'){
+               $line=<SYSIN>;
+               next;
+            }   
             $WATCHED_DIR_LIST[$watch_no++]=$cur_dir;# watched directory line
             $WATCHED_FILE{$cur_dir}=$ref_watched_file;
             $WATCHED_DIR{$cur_dir}=$ref_watched_dir;                   
@@ -302,10 +310,10 @@ my $ChangedWatchedLst='';
          $last_blank=rindex($ChangedWatchedLst,' ');
          $ChangedWatchedLst=substr($ChangedWatchedLst,0,$last_blank).' ... ';
       }   
-      unless($EMAIL_LIST) {
-         $EMAIL_LIST='root';
-      }
-      `cat $LOG_FILE | mail -s "$HOSTNAME Dirhist report about $alert_no changes in $ChangedWatchedLst" "$EMAIL_LIST"`;
+      if ($EMAIL_LIST) {
+         ($max_msglevel==0) && print "Report mailed to $EMAIL_LIST";
+         `cat $LOG_FILE | mail -s "$HOSTNAME Dirhist report about $alert_no changed file(s): $ChangedWatchedLst" "$EMAIL_LIST"`;
+      }     
       logme('X','');
    } 
    exit $alert_no; 
