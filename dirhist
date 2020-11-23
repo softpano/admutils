@@ -6,17 +6,18 @@
 #:: Copyright by Nikolai Bezroukov, 2010-2020 
 #:: Released under Perl Artistic License
 #::
-#:: Designed to be run from cron Daily or hour invocations create the history of changes marked in the particular directory 
-#:: which is helpful for a forensic investigation. The classic example is actions of multiple sysadmin on /etc/files. 
+#:: Designed to be run from cron Daily or hour invocations. After each invocation mail report to selected emeil addresses about changes found 
+#:: As all generation of config file, for example, in ./etc/ are preserved it can be helpful for a forensic investigation. 
+#:: It is very useful in case multiple sysadmin change /etc files.  
 #:: It was actually written after one such SNAFU happened about 10 years ago. 
 #:: 
-#:: Also can be used for recovery of configuration files. 
-#:: For example, when you accidentally propagate authentication related files (passwd, groups, shadow) from RHEL6 to RHEL 7.
+#:: Can be used for recovery of configuration files. 
+#:: For example, when you accidentally propagate authentication related files (passwd, groups, shadow) from RHEL6 to RHEL 7 wiping out file in etc. 
 #::
 #:: --- Invocation
 #::       dirfile <options> [<directory>]
 #:: 
-#:: NOTE: If argument is given it is interpreted as the directory and both ignore and watch files are ignored, even if specified 
+#:: NOTE: If argument is given it is interpreted as the directory and both ignore and watch files are ignored, even if specified. Useful mainly for tecting 
 #::
 #:: --- OPTIONS:
 #::
@@ -63,6 +64,7 @@
 #++ 1.11  2020/11/05   BEZROUN   Error with processing comments in config files fixed.  
 #++ 1.20  2020/11/12   BEZROUN   Default location of mail_list and processing of option -m changed  
 #++ 1.21  2020/11/16   BEZROUN   mail_list fixes reverted 
+#++ 1.22  2020/11/23   BEZROUN   Additional testing and some minor fixes of documentation. 
 # ------------------------------------------ START --------------------------------------------
 use v5.10.1;
 use feature 'state';
@@ -71,7 +73,7 @@ use strict 'subs';
 
    $debug=0;
    $test_file='';
-   $VERSION='1.21'; ;
+   $VERSION='1.22'; ;
    $SCRIPT_NAME='dirhist';
    chomp($today=`date +"%y%m%d_%H%M"`);
    chomp($HOSTNAME=`hostname -s`);   # we will always use short hostname in diagnistic messages

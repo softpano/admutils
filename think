@@ -4,20 +4,20 @@
 #:: Released under Perl Artistic License
 #::
 #:: -- PURPOSE:
-#::           Provide some additional level of protection when working with critical production or remote servers
-#::           The program designed to work via set of automatically generated aliases 
+#::           Provide an additional level of protection when working with critical production or remote servers
+#::           The program designed to work via set of automatically generated aliases
 #::
-#::           It can automatically genera the set of aliases for all affected commands, which after being sourced prevent immediate execution 
+#::           It can automatically generate the set of aliases for all affected commands, which after being sourced prevent immediate execution 
 #::           of the defined commands.
 #::
 #::           Sysadmin will need to retrieve the command from history and re-execute it with the backslash in from (disabling the alias)
 #::
-#::           While not perfect, the utility gives a chance to think again about recently types command before the damage is done
+#::           While not perfect, the utility gives a chance to think again about recently typed command before the damage is done
 #::           It also provided additional context for the command (the current directory for the command like find and rm, 
 #::           server name for commands like shutdown or reboot.
 #::
 #::           All this program does is to introduce a pause 3-7 sec after you entered the command instead of immediate execution of it. 
-#::           For example, for the command reboot it will sleep 7 sec before allowing you to reenter the command from history#::           
+#::           For example, for the command reboot it will sleep 7 sec before allowing you to reenter the command from history          
 #::
 #:: --- INVOCATION
 #::     think  -- this help screen
@@ -50,14 +50,14 @@
 #
 #++ Ver   Date         Who       Modification
 #++ ====  ==========   ========  =========================
-#++ 0.10  2008/05/16   BEZROUN   Initial limited implementation of the idea for reboot 
+#++ 0.10  2008/05/16   BEZROUN   Initial limited implementation of the idea for reboot commands only 
 #++ 0.20  2020/10/30   BEZROUN   More general implementation of the idea 
 #++ 0.30  2020/11/06   BEZROUN   Generation of alias and unalias command
 #++ 0.40  2020/01/12   BEZROUN   Configuration via config file implemented
 #++ 0.50  2020/11/16   BEZROUN   Parameters for several utilities are partially analyzed
 #++ 0.60  2020/11/17   BEZROUN   Option to list the affected files implemented
 #++ 0.70  2020/11/18   BEZROUN   Format of config files extended to include potencially dangerious options
-
+#++ 0.71  2020/11/23   BEZROUN   Help screen improved (type help -h to see it) 
 # ------------------------------------------ START --------------------------------------------
 
 use v5.10.1;
@@ -65,7 +65,7 @@ use warnings;
 use strict 'subs';
 use feature 'state';
   
-   $VERSION='0.7';
+   $VERSION='0.71';
    $debug=0;
    $SCRIPT_NAME='think';
    chomp($HOSTNAME=`hostname -s`);   # we will always use short hostname in diagnistic messages
