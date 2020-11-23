@@ -1,0 +1,373 @@
+#!/usr/bin/perl
+# Nikolai Bezroukov, 2012-2019
+#:: soft_reboot --  Delayed reboot, useful mainly for computational nodes of the cluster or other server, 
+#:: in which application have be memory leaks or other conditions which can be fixed by periodic reboot.
+#
+#:: The script contain built-in istaller that can be used with pdsh and similar parallel execution programs (options -i d and -i w -- daily cron or weekly cron )  
+#
+#:: Operation
+#
+#::   delayed reboot which is performed only when uptime values fall below or are equal to the three supplied threasholds, which in most typical case 
+#::   can be 0 0 0. Those values are checks against values in the oputput of uptoime command.
+#::
+#::   The script operated only the server was more the AGE days up. Default value of AGE is 30 days, but it can be changed by -a parameters.
+#::
+#::   If AGE (uptime in days) is suitable, then the script  compared values with supplied thresholds in a loop N times
+#::   The value N by defauls is calculated as 
+#::             3*AGE hours is MAX_AGE is less the 10, 
+#::             2*AGE if MAX_AGE is less then 30 days 
+#::             AGE hours otherwise
+#::   As the default value of AGE is 30 days, the default value of the number of checks is 30 (30 hours). 
+#
+#::   Number of tries can also be specified explicidly via -m (max tries) parameter.
+#::
+#::   Delay between each try is set by default to one hour but cvan be specigied explidly in hours via -s parameter, 
+#::                  
+#:: The utility can be started  manually (in scrren or with nohup paramnter or, more typical from cron.weekly or cron_daily 
+#:: if cron.week is used you almost ganateed that the box is up for at least a weem, if cron.month then you almost garanteed that the node was up for a month.
+#::
+#:: It can install the requred script into itther cron.weekly or cron.monly via -i parameter (my default cron.weekly
+#:: If you need to use cron_monthly -i m should be supplied 
+#:: Normally it should reside in /root/bin or /usr/local/bin 
+#
+#:: The utility analyses uptime command output has 'load average:' string in it.  
+#::      1:42:12 up 95 days, 15:36,  1 user,  load average: 0.00, 0.01, 0.05
+#:: if there are more then 30 days since the last reboot and the server idle, it reboots it. 
+#::
+#:: If there is work on management computational node that should not be interrupted by reboot create file /root/noboot and script will not operated on this node.
+#::
+#--- Parameters  
+#::   -h -- this screen
+#::   -v -- verbosity level
+#::         0         -- no errors are displayed
+#::         1 or -v   -- only "serious errors" are displayed (default)
+#::         2 or -vv  -- only "serious errors" and "errors" are displayed
+#::         3 or -vvv -- "serious errors", "errors" and "warnings" are displayed
+#::   -a age, or min up time in days for reboot. should be a positive number. Default 30 (monthly) 
+#::   -m max tries (defulat is 30) amount of times the utility tried to find the target values of uptime command. 
+#::   -i install
+#::      w into cron.seekly
+#::      d into cron daily 
+#::   -l target location for the script (can be used only with option -i; Default is /usr/local/bin
+#::   -d -- debug == type of testing
+#::         1 -- testing -- print string with /sbin/reboot command in STDIN instead of rebooting 
+#
+#--- Development History
+#
+# Ver      Date        Who        Modification
+# ====  ==========  ========  ==============================================================
+# 1.00  2012/03/31  BEZROUN   Initial implementation
+# 1.10  2017/01/15  BEZROUN   Three uptime readings defaults are 0,0, and 0.01 and they can be supplied as parameter
+# 1.20  2017/01/15  BEZROUN   if /root/noreboot file is present do not reboot the box. 
+# 1.30  2019/02/27  BEZROUN   Installer added to run directly via pdsh and similar programs. 
+# 1.40  2020/11/16  BEZROUN   Minor corrections. Custom option parsing sub is used now. It allows repetions in specifing numeric options.  
+# 
+# -------------- START --------------------------------------------
+use v5.10;
+use feature 'state';
+use warnings;
+use strict 'subs';
+
+   $SCRIPT_NAME="soft_reboot";
+   $VERSION='1.40';
+   $HOSTNAME=$ENV{'HOSTNAME'};
+#
+# DEFAULTS
+# 
+   $debug=0;
+   $verbosity=0;
+   $age=30;
+   if ($age <10) {
+      $max_checks=3*$age;
+   }elsif ($age<30) {
+      $max_checks=2*$age; 
+   }else{
+      $max_checks=$age;
+   }  
+   $sleep_period=60*60; # one hour
+   $BannerInvocation=0;
+
+   $REBOOT_COMMAND='/sbin/reboot';
+   
+   $UpLimit1=0;
+   $UpLimit2=0;
+   $UpLimit3=0.01;
+   
+   $default_location='/usr/local/bin';
+   $ErCount=0; # global counter of errors
+   
+   process_options(); 
+    
+   if ($debug) {
+     $REBOOT_COMMAND='echo '.$REBOOT_COMMAND;
+     $verbosity=1;
+     $sleep_period=1;
+   }
+   parameters_check();
+   if( $verbosity) { 
+      banner();
+      print "=== OPTIONS USED===\n";
+      print "\tThresholds for load averages........................\t$UpLimit1, $UpLimit2, $UpLimit3\n";
+      print "\tMinimum uptime required ( in days )(option -a).......\t$age\n";
+      print "\tSleep period in sec (option -s).....................\t$sleep_period\n";
+      print "\tNumber of retries before quiting (option -m).........\t$max_checks\n";   
+      ($debug) && print "\tATTENTION: The script is working in debug mode\n";               
+   }
+
+#
+# Check for /root/noreboot file. Exit if found 
+#
+   if ( -f '/root/noreboot') {
+      ermes(__LINE__,'S','Reboot of this server is prohibited: /root/noreboot file exists. Exiting...');
+      exit 1;
+   } 
+#
+# Main loop -- try to catch the proper momement:  check uptime and if it above zero sleep one hour. If it is zero reboot the box
+# 
+   for( $check_no=0; $check_no<$max_checks; $check_no++ ){
+      chomp($uptime=`uptime`); 
+      out('UPTIME:'.$uptime);
+      exit if (index($uptime, 'days') == -1); # server was recently rebooted
+      #
+      # check how long we are up
+      #
+     
+      $uptime=~/up\s+(\d+)\s*days/;
+      $days_up=$1;
+      exit if ( $days_up < $age); # too early to try 
+
+      $splitpoint=index($uptime,'load average:')+length('load average:'); 
+      $averages=substr($uptime, $splitpoint);
+      ($a1,$a2,$a3)=split(/,\s*/,$averages);
+      #
+      # main check
+      #
+      if( $a1<=$UpLimit1 && $a2<=$UpLimit2 && $a3<=$UpLimit3 ){
+           ermes(__LINE__,'W',"Conditions for reboot are met:\n" 
+              ."\tDays after prev reboot $days_up > $age (threshold)\n"
+              ."\tSystem load average for the past 1 min:  $a1 is less then threshold $UpLimit1\n"
+              ."\tSystem load average for the past 5 min:  $a2 is less then threshold $UpLimit2\n"
+              ."\tSystem load average for the past 15 min: $a3 is less then threshold $UpLimit3\n");
+           out("\nRebooting the server using the command: $REBOOT_COMMAND");
+               
+          `$REBOOT_COMMAND`;
+           exit; 
+      } 
+     `sleep $sleep_period`; # wait for the next chance to reboot in an hour or so. 
+   } # while (main loop)  
+   exit $check_no;
+#
+# =======================================================SUBROTINES
+#   
+
+#
+# Check if the number of paraters is correct. Should be zero or three 
+#
+sub parameters_check
+{
+my ($para_no,$i);
+   if( scalar(@ARGV)==3 ){
+      for($i=0; $i<@ARGV; $i++ ){
+         $para_no=$i+1;
+         next if ( $ARGV[$i] =~/\d+/ );
+         ermes(__LINE__,'S',"The parameter no 1 should be numeric. Supplied value is $ARGV[$i]");    
+      }
+      ($UpLimit1,$UpLimit2,$UpLimit3)=@ARGV;     
+   }  
+   if( scalar(@ARGV)>0 ){
+      ermes(__LINE__,'S',"Wrong number of parameters. It should three paramters, each of which corresponds to the maximum uptime value for the reboot");     
+   } 
+ } 
+sub process_options
+{
+   getopts('hvda:s:c:i:l:',\%options);
+   if ( exists($options{'h'}) ) {
+      helpme();
+   }
+   if ( exists($options{'v'}) ) {      
+      $verbosity=1;
+      banner();  
+   }   
+   if ( exists($options{'d'}) ) {
+      $debug=$verbosity=1; 
+      banner();      
+   }
+    if ( exists($options{'s'}) ) {      
+      unless( is_number($options{'s'}) ){
+         ermes(__LINE__,'S','Option -s (sleep period in sec) should be an integer. Supplied value was '.$options{'s'});
+      }   
+      $sleep_period=$options{'s'}
+   }
+   if ( exists($options{'a'}) ) {
+      unless( is_number($options{'a'}) ){
+         ermes(__LINE__,'S','Option -a (age, or min up time in days for reboot ) should be a positive number. Supplied value was '.$options{'a'});
+      }   
+      $age=$options{'s'}
+   }
+    
+   if ( exists($options{'i'}) ) {
+      unless ($verbosity) {        
+         $verbosity=1; 
+         banner();
+      }  
+      if( exists($options{'l'}) ){
+         unless( exists($options{'i'}) ){
+            ermes(__LINE__,'S','Option -l can be specified only with option -i');
+         }
+         $default_location=$options{'l'};
+         ermes(__LINE__,'W','Default location $default_location is used');
+      }
+      $install_mode=$options{'i'};      
+      if( $install_mode eq 'm' ){
+         install('m');
+      }elsif( $install_mode eq 'w' ){
+        install('w');
+      }else{
+        ermes(__LINE__,'$',"Wrong value of option -i --  $install_mode");
+      }
+                 
+   }
+   
+}
+sub out
+{
+  ($verbosity) && print "$_[0]\n";   
+}
+sub helpme
+{
+   open(SYSHELP,'<',$0);
+   while($line=<SYSHELP>) {
+      if ( substr($line,0,3) eq "#::" ) {
+         print substr($line,3);
+      }
+   } # for
+   close SYSHELP;
+   while(<DATA>){
+      print " $_";
+   } # while
+   exit 0;
+}
+sub banner
+{ 
+   if($BannerInvocation==0) {   
+      ($verbosity)&& print "\n",uc($SCRIPT_NAME).' Version ',$VERSION,'. Running on server ',$HOSTNAME,"\n";
+      $BannerInvocation++;
+   }   
+}
+#
+# Light-weight implementation of disgnoistc messages suroutine
+#
+sub ermes
+{ 
+my ($line,$severity,$message)=@_;
+my $prefix='';
+   return if ($verbosity==0 && $severity  eq 'W'); # supress warnings is verbosity is set to zert
+   if( $severity eq 'S' ){
+      $prefix='[FAILURE]';
+      print "\n\n=======================================================================\n";
+   }elsif( $severity eq 'E' ){
+      $prefix='[ERROR]';
+   }   
+   print "$line$severity $prefix $message\n\n";
+   $ErCount++; 
+   
+   exit $ErCount if( $severity eq 'S' );  # do not countinue is severe error is encounted      
+} #ermes
+#
+# Check is supplied parameter is a number
+#
+sub is_number
+{
+   if ( $_[0] =~/\d+/ ){
+      return 1;
+   } 
+   ermes('S',"Instead of $_[0] we expect an integer");      
+}
+#
+# Build in installer. Can be used with pdsh and similar parralel execution programs. 
+#
+sub install
+{
+my $install_mode=$_[0];
+my $target;
+  if ($install_mode eq 'w') {
+     $target='weekly';     
+  }else{
+     $target='monthly';
+  } 
+  out("===== $SCRIPT_NAME Installer: mode $install_mode was specified =====\n\n");  
+  unless ( -f $default_location ){
+     `cp -v $0 $default_location/$SCRIPT_NAME`;
+      if ( -f "$default_location/$SCRIPT_NAME" ){
+         ermes(__LINE__,'W',"$SCRIPT_NAME was not found in $default_location. It was copied to this directory");
+      }else{
+         ermes(__LINE__,'S',"[FAILURE] Unable to copy $SCRIPT_NAME to $default_location. Does the directory exists? ");
+      }
+      `chmod 755 $default_location/$SCRIPT_NAME`; 
+   }   
+   `echo $default_location/$SCRIPT_NAME >> /etc/cron.$target/$SCRIPT_NAME.sh`;
+   unless ( -f "/etc/cron.$target/$SCRIPT_NAME.sh" ){
+     ermes(__LINE__,'S',"Can't write to /etc/cron.$target .");
+   } else {
+     ermes(__LINE__,'W',"Invocation of $default_location/$SCRIPT_NAME will be via script  soft_reboot.sh  in  /etc/cron.$target");
+   }   
+   out("\nAfter installation we have:\n");
+   print `ls -l $default_location/$SCRIPT_NAME`,"\nand\n\n",`ls -l /etc/cron.$target/$SCRIPT_NAME.sh`;
+   out("\nInstallation finished sucessfully\n\n");
+   exit 0;   
+} # install  
+sub getopts
+{
+my ($options_def,$options_hash)=@_;
+my ($first,$rest,$pos,$cur_opt);
+   while(@ARGV){
+      $cur_opt=$ARGV[0];
+      last if( substr($cur_opt,0,1) ne '-' );
+      if(  $cur_opt eq '--'){
+          shift @ARGV;
+          last;
+      }
+      $first=substr($cur_opt,1,1);
+      $pos = index($options_def,$first);
+      if( $pos==-1){
+         warn("Undefined option -$first skipped without processing\n");
+         shift(@ARGV);
+         next;
+      }
+      $rest=substr($cur_opt,2);
+      if( $pos<length($options_def)-1 && substr($options_def,$pos+1,1) eq ':' ){
+         # option with parameters
+         if( $rest eq ''){
+           shift(@ARGV); # get the value of option
+           unless( @ARGV ){
+              warn("End of line reached for option -$first which requires argument\n");
+              $$options_hash{$first}='';
+              last;
+           }
+           if(   $ARGV[0] =~/^-/ ){
+               warn("Option -$first requires argument\n");
+               $$options_hash{$first} = '';
+           }else{
+               $$options_hash{$first}=$ARGV[0];
+               shift(@ARGV); # get next chunk
+           }
+         }else{
+            #value is concatenated with option like -ddd
+            if( ($first x length($rest)) eq $rest ){
+               $$options_hash{$first} = length($rest)+1;
+            }else{
+               $$options_hash{$first}=$rest;
+            }
+            shift(@ARGV);
+         }
+      }else {
+         $$options_hash{$first} = 1; # set the option
+         if(  $rest eq ''){
+            shift(@ARGV);
+         }else{
+            $ARGV[0] = "-$rest"; # there can be other options without arguments after the first
+         }
+      }
+   }
+}
+__DATA__

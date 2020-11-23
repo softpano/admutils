@@ -11,14 +11,15 @@
 #:: It was actually written after one such SNAFU happened about 10 years ago. 
 #:: 
 #:: Also can be used for recovery of configuration files. 
-#:: For example, when you accidentally propagate authentication related files (passwd, groups, shadow) from RHEL6 to RHEL 7. 
-
-#:: Invocation
-#::    dirfile <options> [<directory>]
+#:: For example, when you accidentally propagate authentication related files (passwd, groups, shadow) from RHEL6 to RHEL 7.
+#::
+#:: --- Invocation
+#::       dirfile <options> [<directory>]
 #:: 
 #:: NOTE: If argument is given it is interpreted as the directory and both ignore and watch files are ignored, even if specified 
 #::
-#:: Options:
+#:: --- OPTIONS:
+#::
 #::   -b -- base  (name of the tar archive to use as a reference point)
 #::   -h -- this screen
 #::   -v -- verbosity level
@@ -26,10 +27,12 @@
 #::         1 or -v   -- only "serious errors" are displayed (default)
 #::         2 or -vv  -- only "serious errors" and "errors" are displayed
 #::         3 or -vvv -- "serious errors", "errors" and "warnings" are displayed
-#::   -x file -- absolute path to configuration fiels with files and subdirectories to ignore (default is the first in the list /var/Dirhist_base/dirhist_ignore.lst )
-#::   -w file -- absolute path to configuration files with files and subdirectories to watch  (default is the first in the list /var/Dirhist_base/dirhist_watch.lst ) 
-#::   -e email -- the list of emails (separated by comma) to email report, if any of the watched files was changed.  
-#::               Default is picked up as the first line of /root/primary_admin file, if it exists. 
+#::
+#::   -x file   -- absolute path to configuration fiels with files and subdirectories to ignore (default is the first in the list /var/Dirhist_base/dirhist_ignore.lst )
+#::   -w file   -- absolute path to configuration files with files and subdirectories to watch  (default is the first in the list /var/Dirhist_base/dirhist_watch.lst ) 
+#::   -e email  -- either file with the list of emails (one adress per line) or the list of emails (separated by comma) to email report, 
+#::                if any of the watched files was changed.  
+#::                The default list is picked up from the file ~/mail.lst file, if it exists (one line per address) 
 #::
 #--------------- Development History -----------------------------------------------------------------------------------
 #
@@ -58,10 +61,17 @@
 #++ 1.00  2020/11/03   BEZROUN   Major rewrite. Code generalised for arbitraty set of directories.
 #++ 1.10  2020/11/04   BEZROUN   Logic and diagnistics improved. 
 #++ 1.11  2020/11/05   BEZROUN   Error with processing comments in config files fixed.  
+#++ 1.20  2020/11/12   BEZROUN   Default location of mail_list and processing of option -m changed  
+#++ 1.21  2020/11/16   BEZROUN   mail_list fixes reverted 
 # ------------------------------------------ START --------------------------------------------
+use v5.10.1;
+use feature 'state';
+use warnings;
+use strict 'subs';
+
    $debug=0;
    $test_file='';
-   $VERSION='1.1'; ;
+   $VERSION='1.21'; ;
    $SCRIPT_NAME='dirhist';
    chomp($today=`date +"%y%m%d_%H%M"`);
    chomp($HOSTNAME=`hostname -s`);   # we will always use short hostname in diagnistic messages
@@ -78,14 +88,14 @@
 #
 # Default Parameters including BASE and LOG_DIR
 #
-   $EMAIL_LIST=''; #CONFIG++ directory for tar files and generation of changed files 
-   $BASE='/var/'.ucfirst($SCRIPT_NAME).'_base'; #CONFIG++ directory for tar files and generation of changed files 
-   $EXCLUDED_FILES="$BASE/$SCRIPT_NAME".'_ignore.lst';  #CONFIG: the file with the list of excluded file and subdirectories for each watched firectory in YAML-style dictionary format.  
-   $WATCHED_FILES="$BASE/$SCRIPT_NAME".'_watch.lst';     #CONFIG: the file with the list of watched file and subdirectories for each watched firectory in YAML-style dictionary format. 
+   $MAIL_LIST='';                                       #CONFIG-ELIGIBLE: the list of comma separated email addressed to send the log  
+   $BASE='/var/'.ucfirst($SCRIPT_NAME).'_base';         #CONFIG-ELIGIBLE: directory for tar files and generation of changed files 
+   $EXCLUDED_FLIST="$BASE/$SCRIPT_NAME".'_ignore.lst';  #CONFIG-ELIGIBLE: the file with the list of excluded file and subdirectories for each watched firectory   
+   $WATCHED_FLIST="$BASE/$SCRIPT_NAME".'_watch.lst';    #CONFIG-ELIGIBLE: the file with the list of watched file and subdirectories for each watched firectory  
    $WATCHED_DIRS='';
-   $LOG_DIR="$BASE/Logs"; #CONFIG:  The directory for logs. The default is /var/Dirhist_base
+   $LOG_DIR="$BASE/Logs"; #CONFIG-ELIGIBLE:  The directory for logs. The default is /var/Dirhist_base
    `mkdir -p -m 700 $LOG_DIR` unless ( -d "$LOG_DIR" );
-   $LOG_RETENTION_PERIOD=365;  #CONFIG: Number of day logs are kept in the LOG_DIR directory. The default is 365 days (one year)
+   $LOG_RETENTION_PERIOD=365;  #CONFIG-ELIGIBLE: Number of day logs are kept in the LOG_DIR directory. The default is 365 days (one year)
 #
 #  Process config file, if any 
 #
@@ -120,53 +130,51 @@
    if( $debug>0 ){
       out("The program is working in debug mode $debug");
       logme('V',3,3); 
-      autocommit("$HOME/Archive",$SCRIPT_NAME,0)
+      autocommit("$HOME/Archive",0);
    }else{
       logme('V',3,3);
    }
-   if( exists($options{'e'}) ){
-      $EMAIL_LIST=$options{'s'};
-   }else{
-      $EMAIL_LIST=get_primary_admin(); # try to get it iether from /etc/passwd UID 0 field or /root/primary_admin 
-   }
-   
+      
    if( exists($options{'x'}) ){  
-      $EXCLUDED_FILES=$options{'x'};
-      unless (-f $EXCLUDED_FILES){
-         abends("File $EXCLUDED_FILES specified in option -x does not exists");
+      $EXCLUDED_FLIST=$options{'x'};
+      unless (-f $EXCLUDED_FLIST){
+         abends("File $EXCLUDED_FLIST specified in option -x does not exists");
       }
    }
    
    if( exists($options{'w'}) ){  
-      $WATCHED_FILES=$options{'w'};
-      unless (-f $WATCHED_FILES){
-         abends("File $WATCHED_FILES specified in option -x does not exists");
+      $WATCHED_FLIST=$options{'w'};
+      unless (-f $WATCHED_FLIST){
+         abends("File $WATCHED_FLIST specified in option -x does not exists");
       }
    }   
+   
+    if( exists($options{'m'}) ){  
+      $MAIL_LIST=$options{'m'};
+      if (-f $MAIL_LIST){
+         get_mail_list($MAIL_LIST);
+      }elsif( $mail_list=~/^.+?\@.+?\.\w+(,.+?\@.+?\.\w+)*$/ ){
+         logme('W',"Mailing redirected to the address(es) $MAIL_LIST\n");
+      }else{
+         abends("The value of option -m ($mail_list) can't be intepreted as email address or a file with list of addresses");
+      }         
+   } 
    
    if (scalar($ARGV)>0) {
       if ( -d $ARGV[0]){
          $WATCHED_DIR_LIST=@ARGV
       }
-      $EXCLUDED_FILES=$WATCHED_FILES='';      
+      $EXCLUDED_FLIST=$WATCHED_FLIST='';      
    }   
   
-
-#
-# Save previous message
-#
-   if (-f "$LOG_DIR/message") {
-      $filestamp=`date -r  "$LOG_DIR/message" +"%y%m%d_%H%M"`; chomp($filestamp);
-      `mv $LOG_DIR/message $LOG_DIR/message.$filestamp`;
-   }
 
 #
 # Exclusions should be prefixed by the directory in question. Comparison is via index function, not via regex
 # as file names contain dots and possibly other regex characters.
 #
         
-   if( $EXCLUDED_FILES && -f $EXCLUDED_FILES){
-          open( SYSIN,'<',$EXCLUDED_FILES ) || abend("Can't open the file $BASE/files2report.lst for reading");
+   if( $EXCLUDED_FLIST && -f $EXCLUDED_FLIST){
+          open( SYSIN,'<',$EXCLUDED_FLIST ) || abend("Can't open the file $BASE/files2report.lst for reading");
       while($line=<SYSIN> ){
          next if substr($line,0,1) eq '#';
          chomp($line);
@@ -223,8 +231,8 @@
 #
 # Selected specially watched files -- IMPORTANT file list
 #
-   if( $WATCHED_FILES && -f $WATCHED_FILES){
-      open(SYSIN,'<',$WATCHED_FILES) || abend("Can't open the file $BASE/files2report.lst for reading");
+   if( $WATCHED_FLIST && -f $WATCHED_FLIST){
+      open(SYSIN,'<',$WATCHED_FLIST) || abend("Can't open the file $BASE/files2report.lst for reading");
       $watch_no=0;
       while($line=<SYSIN> ){
          next if substr($line,0,1) eq '#';
@@ -283,7 +291,7 @@
          }
       } #while
    }else{
-      logme('E',"No watched files/dirs  config file ( $WATCHED_FILES ) was used in this run\n");     
+      logme('E',"No watched files/dirs  config file ( $WATCHED_FLIST ) was used in this run\n");     
    }      
   
    
@@ -310,9 +318,9 @@ my $ChangedWatchedLst='';
          $last_blank=rindex($ChangedWatchedLst,' ');
          $ChangedWatchedLst=substr($ChangedWatchedLst,0,$last_blank).' ... ';
       }   
-      if ($EMAIL_LIST) {
-         ($max_msglevel==0) && print "Report mailed to $EMAIL_LIST";
-         `cat $LOG_FILE | mail -s "$HOSTNAME Dirhist report about $alert_no changed file(s): $ChangedWatchedLst" "$EMAIL_LIST"`;
+      if ($mail_list) {
+         ($max_msglevel==0) && print "Report mailed to $MAIL_LIST";
+         `cat $LOG_FILE | mail -s "$HOSTNAME Dirhist report about $alert_no changed file(s): $ChangedWatchedLst" "$MAIL_LIST"`;
       }     
       logme('X','');
    } 
@@ -488,27 +496,31 @@ my $filestamp;
    shell("$CP -p $filepath $TARGET_DIR"); # save latest version in HISTORY with org timestamp and attributes. 
 } # savefile
 
-sub get_primary_admin
-# slurps /root/primary_admin and extracts email adress from it. If does not exist tries /etc/passwd root record. 
+sub get_mail_list
+# slurps $ENV{$HOME}/mail.lst and extracts email adress from it. If does not exist tries to extract email address from /etc/passwd root record. 
 {
-   if ( -f "/root/primary_admin" ) {
-     chomp($primary_admin=`cat /root/primary_admin`);
-     if( index($primary_admin,':')>-1) {
-       ($primary_admin, undef)=split(/:/,`cat /root/primary_admin`,2);
-     }
-     return $primary_admin;
+my $mail_list_file;   
+   if(scalar(@_)>0) {
+      $mail_list_file=$_[0];
    }else{
-     $primary_admin=`grep -P '^root' /etc/passwd`;
-     my @F=split(/:/,$primary_admin);
-     $primary_admin=$F[4];
+      $mail_list_file="$ENV{$HOME}/mail.lst"
+   }   
+      
+   if ( -f $mail_list_file ) {
+     chomp($mail_list=`cat $mail_list_file`);   
+     $MAIL_LIST=~tr/\n/ /; # convert the lsit into a space separated string (spaces         
+     return $MAIL_LIST;
+   }else{
+     $MAIL_LIST=`grep -P '^root' /etc/passwd`;
+     my @F=split(/:/,$mail_list);
+     $MAIL_LIST=$F[4];        
    }  
-   if( index($primary_admin,'@')>=1 ){
-      return $primary_admin;
+   if( index($MAIL_LIST,'@')>=1 ){
+      return $MAIL_LIST;
    }else{
-      logme('S','Unable to detect email address of primary administrator for the server. Please specify it in option -a, or in the file /root/primary_admin'); 
+      logme('S','Unable to detect default_mail_list for the server'); 
       return '';
-   }
-     
+   }     
 }
 #================================================================
 # Standard subroutines -- version 3.00 (Dec 11, 2014)
@@ -557,7 +569,8 @@ my ($archive_dir,$use_git)=@_; #Script name can be with ewxprentionpl or without
 #
 my $build_timestamp;
 my $script_delta=1;
-my $file=( ($last=index($0,'/'))>-1 ) ? substr($0,$last+1):$0;
+my $file=$0;
+      if( ($last=rindex($0,'/'))>-1 ){ $file=substr($0,$last+1);}
       ( ! -d $archive_dir ) && `mkdir -p $archive_dir`;
       if(  -f "$archive_dir/$file"  ){
          if( (-s $0 ) == (-s "$archive_dir/$file")   ){
@@ -574,6 +587,7 @@ my $file=( ($last=index($0,'/'))>-1 ) ? substr($0,$last+1):$0;
           ($use_git) && `cd $archive_dir && git commit $archive_dir/$file`; # autocommit
       }
 } # autocommit
+
 sub get_config
 {
 my $config_file=$_[0];
@@ -674,7 +688,7 @@ my ($package, $filename, $lineno) = caller;
 my $ercode=uc(substr($_[0],0,1)); # Parameter 1 -- message code. It can be several letters long, not only a single letter
 # my $ersuffix=(length($_[0])>1) ? substr($_[0],1,1):''; # suffix of error code currently is unused. 
 chomp( my $message=$_[1]); #Parameter 2 -- text of the message (see ercode -- Parameter 1 prcessed below) 
-     $message="$SCRIPT_NAME\-$lineno$ercode: $message"; # Form diagnostic message with error code, line number and the text of the message
+     $message="$SCRIPT_NAME\-$ercode$lineno: $message"; # Form diagnostic message with error code, line number and the text of the message
 my   $severity=index("WEST",$ercode);
      if( $severity==-1){
          out($message); # informational 'I' messages and messages with wrong error code. 

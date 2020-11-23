@@ -1,0 +1,526 @@
+#!/usr/bin/perl
+#:: think -- set or remove aliases that will pause before execution of potentially dangerous/destructive commands
+#:: Copyright by Nikolai Bezroukov 2008-2020
+#:: Released under Perl Artistic License
+#::
+#:: -- PURPOSE:
+#::           Provide some additional level of protection when working with critical production or remote servers
+#::           The program designed to work via set of automatically generated aliases 
+#::
+#::           It can automatically genera the set of aliases for all affected commands, which after being sourced prevent immediate execution 
+#::           of the defined commands.
+#::
+#::           Sysadmin will need to retrieve the command from history and re-execute it with the backslash in from (disabling the alias)
+#::
+#::           While not perfect, the utility gives a chance to think again about recently types command before the damage is done
+#::           It also provided additional context for the command (the current directory for the command like find and rm, 
+#::           server name for commands like shutdown or reboot.
+#::
+#::           All this program does is to introduce a pause 3-7 sec after you entered the command instead of immediate execution of it. 
+#::           For example, for the command reboot it will sleep 7 sec before allowing you to reenter the command from history#::           
+#::
+#:: --- INVOCATION
+#::     think  -- this help screen
+#::     think alias -- generate set of alias commands to use
+#::     think unalias -- generate set of unalias commands to cancel previous aliases
+#::     think find . -exec ls {} \; -- delay execution of specified command and provide context of its execution.
+#::
+#:: All operations are logged in ~/Think/Logs directory. 
+#::
+#:: --- CONFIGURATION:
+#::
+#:: The utility uses two configuration files:
+#::     /etc/think.conf    System configuration file. 
+#::     ~/think.conf       Private configuration file
+#::  In the current version each line of configuration files consists of the name of the utility followed by colon
+#::  and a set of options:
+#::    PWD -- display PWD
+#::    HOST  -- display host 
+#::    EXPANDED -- display expanded command
+#::    LS -- execute the ls command instead of the given command to see what files will be affected. 
+#::    Entries starting with -(dash) are interpreted as options you need to check for, for example -L, -exec in the example below.
+#::
+#::    If the command line contains those option the command is considered to be potentially more dangerous and the length of pause
+#::    increases by three sec for each such option allowing the sysadmin to think over the command just entered.
+#:: 
+#:: --- EXAMPLE OF CONFIGURATION FILE
+#::
+
+#--- Development History
+#
+#++ Ver   Date         Who       Modification
+#++ ====  ==========   ========  =========================
+#++ 0.10  2008/05/16   BEZROUN   Initial limited implementation of the idea for reboot 
+#++ 0.20  2020/10/30   BEZROUN   More general implementation of the idea 
+#++ 0.30  2020/11/06   BEZROUN   Generation of alias and unalias command
+#++ 0.40  2020/01/12   BEZROUN   Configuration via config file implemented
+#++ 0.50  2020/11/16   BEZROUN   Parameters for several utilities are partially analyzed
+#++ 0.60  2020/11/17   BEZROUN   Option to list the affected files implemented
+#++ 0.70  2020/11/18   BEZROUN   Format of config files extended to include potencially dangerious options
+
+# ------------------------------------------ START --------------------------------------------
+
+use v5.10.1;
+use warnings;
+use strict 'subs';
+use feature 'state';
+  
+   $VERSION='0.7';
+   $debug=0;
+   $SCRIPT_NAME='think';
+   chomp($HOSTNAME=`hostname -s`);   # we will always use short hostname in diagnistic messages
+   $HOME=$ENV{'HOME'};
+   $verbosity1=$verbosity2=3;
+     
+#
+# Initialization for logme
+#
+   @ermessage_db={}; # accumulates messages for each category (warning, errors and severe errors)
+   @ercounter=(0,0,0,0);
+   logme('V',2,3); # initialize logme so that it can be used in options 
+   
+#
+# Default Parameters including BASE and LOG_DIR
+#
+
+   $BASE='/var/'.ucfirst($SCRIPT_NAME).'_base'; #CONFIG++ directory for tar files and generation of changed files 
+   $LOG_DIR="$BASE/Logs"; #CONFIG-ELIGIBLE:  The directory for logs. The default is /var/Dirhist_base
+   `mkdir -p -m 700 $LOG_DIR` unless ( -d "$LOG_DIR" );
+   $LOG_RETENTION_PERIOD=365;  #CONFIG-ELIGIBLE: Number of day logs are kept in the LOG_DIR directory. The default is 365 days (one year)
+   if( $debug>0 ){      
+      banner(ucfirst($SCRIPT_NAME)."(Think It Over First), Version $VERSION",$LOG_DIR,$LOG_RETENTION_PERIOD);
+      logme('V',3,3); 
+      autocommit("$HOME/Archive",0);
+      out("The program is working in debug mode $debug");
+   }else{
+      banner('',$LOG_DIR,$LOG_RETENTION_PERIOD);
+      logme('V',2,3);
+   }
+#
+#   GETOPTS change @ARGV and can't be used. So no standard options, unless they set in config file. 
+#   
+
+
+# CATALOG
+# first letter - delay
+# second letter - provade PWD
+# third letter -- provide HOST
+# 4th  letter -- expanded command
+# 5th         -- options analysis 
+%catalog=('PWD'=>1,'HOST'=>2,'EXPANDED'=>3,'LS'=>4); 
+%benigh_commands=('cd'=>'0','echo'=>'0','cat'=>'0','head'=>'0','tail'=>'0','ls'=>'0','tree'=>'0', #benigh commands
+   'mc'=>'0','ll'=>'0','file'=>'0','which'=>'0','wc'=>'0',); #benigh commands
+%watched_command=(  
+   'reboot'=>'70100','shutdown'=>'70100','halt'=>'70100', # dangerous commands (assidental reboot type of errors) 
+   'rm'=>'31001','find'=>'31001','chmod'=>'31001','chown'=>'31001', #dangerous commands
+   'tar'=>'31000','gzip'=>'31000','gunzip'=>'31000', #dangerous commands
+   );
+%dangerous_options=('find'=>'-exec:-L', 'rm'=>'-r:-f', 'chmod'=>'-R', 'chown'=>'-R'); 
+#
+#  Process config file, if any. Only config can be used for this utility for setting standard options
+#
+   if( defined($ENV{"$SCRIPT_NAME\_conf"}) && -f $ENV{"$SCRIPT_NAME\_conf"} ){
+	   # take config from envinment.
+	   $SYS_CONFIG="$SCRIPT_NAME\_conf"; # environment setting is higher priority
+      get_config($SYS_CONFIG);
+	}else{
+      @CONFIG_LOCATIONS=("$HOME/.config/$SCRIPT_NAME.conf", "$HOME/$SCRIPT_NAME.conf","/etc/$SCRIPT_NAME.conf"); 
+      for( $i=0; $i<@CONFIG_LOCATIONS; $i++ ){
+         next unless( -f $CONFIG_LOCATIONS[$i] );
+         get_config($CONFIG_LOCATIONS[$i]);
+         last;
+      } 
+   }
+   $verbosity1=0; # log only to log file, block console messages
+   
+   if (scalar(@ARGV)==0 || scalar(@ARGV)==0 && $ARGV[0] eq '-h' ){
+      helpme();
+   }elsif(scalar(@ARGV)==1 && $ARGV[0] eq 'alias' ){   
+      for $com (keys %watched_command){
+         say "alias $com='think $com' ";
+      }
+      exit;
+   }elsif(scalar(@ARGV)==1 && $ARGV[0] eq 'unalias' ){
+      for $com (keys %watched_command){
+         say "unalias $com";
+      }
+      exit;
+   }   
+   $original_command=join(' ',@ARGV);
+   logme('I', $original_command);
+   $command=shift;
+
+   $delay=3;
+   if( exists($watched_command{$command}) ){
+      $delay=substr($watched_command{$command},0,1);  
+   }else{
+      say 'You are in '.$ENV{'PWD'}.'. Please resubmit the command with fron \\(backslash)';
+      exit 0;
+   }   
+   $infoline='';
+   @action_bit=split('',$watched_command{$command});
+   $infoline.='PWD: '.$ENV{'PWD'}.' ' if $action_bit[1];
+   $infoline.="HOST: $HOSTNAME " if $action_bit[2];
+   if( $action_bit[3]==2 ){
+      $infoline.="EXPANDED COMMAND: $original_command " if $action_bit[3];
+   }elsif( $action_bit[3]==1 ){
+      $infoline.=scalar(@ARGV)." options and arguments";
+   } 
+
+   if( exists($dangerious_options{$command} ){
+      $infoline.=parse_options();
+      @check_opt=split(/:/,$dangerous_options{$command});
+      foreach $opt (@check_opt){
+         if( exists( $opt_list{$opt}) ){
+            $infoline.=" WARNING: potentially dangerious option $opt specified.";
+            $delay+=3;
+         }
+      }
+      foreach $arg (keys(%arg_list)){
+         $infoline.=$arg_list{$arg};
+         $delay+=3;
+      }
+      
+   }
+   say $infoline;
+   say "(if correct resubmit with the \\(backslash) as prefix in $delay sec)";
+   logme('I', $infoline);
+   if( $action_bit[3]==1 ){
+      `ls -l `.join(' ',@ARGV;
+   } 
+   `sleep $delay`;
+   if( $debug ){
+      say "DEBUG INFO: delay=$delay","Expanded command: ",$original_command;
+   }         
+   exit 0; 
+   
+sub parse_options
+{
+#
+# Loop for processing options. Detect if we are used -r -R ot -f. 
+#
+   for( my $i=0; $i<@ARGV; $i++ ){
+      $p=$ARGV[$i];
+      if( substr($p,0,1) eq '-' ){
+         $opt_list{$p}=1;
+         next;
+      }elsif($p eq '/'){
+         $arg_list{'/')=" Argument / found. Possible typo";
+      }elsif($p eq '.'){
+         $arg_list('.')=" Argument . found. ";
+      }elsif(substr($p,4) eq '/etc'){
+         $arg_list('/etc')=" Argument starting with /etc found.";
+      }         
+   } # for
+}   
+sub get_config
+{
+my $config_file=$_[0];
+my @conf=`cat $config_file`;
+my ($line,$i);
+#
+# first pass
+#
+   for( $i=1; $i<@conf; $i++ ){
+      next if substr($line,0,1) eq '#';
+      chomp($line);
+      $line=$1 if $line=~/^(.*\S)\s+$/;         
+      next unless( $line=~/^w+\:/ );
+      ($name,$flags)=split(/:/,$line);  
+      @action=split(/[\s\:]/,$flags);  
+      $instruction='00000';      
+      foreach $element (@action) {
+         if( $element=~/\d/){
+            substr($instruction,0,1)=$element; # pause
+         }elsif( substr($element,0,1) eq '-' ){
+            if( exists($dangerous_options{$name} ){
+               $dangerous_options{$name}.=':'.$element; # add 
+            }else{
+               $dangerous_options{$name}=':'.$element;
+            }               
+         }elsif( exists($catalog{$element}) ){
+            $pos=$catalog{$element};
+            substr($instruction,$pos,1)=1; # action for infoline
+         }else{
+            logme('S',"Context tag $element is not recognized in configuration file line $.:\n\t$line ");
+            exit;
+         }  
+      }   
+      $watched_command{$name}=$instruction;
+   }
+#  second pass -- varibles only    
+   for( $i=1; $i<@conf; $i++ ){
+      chomp($line=$conf[$i]);
+      if( substr($line,0,1) eq '#' ){
+         $conf[$i]='';
+         next;
+      }
+      if( index($line,'=') ==-1 ){
+         $conf[$i]='';
+         next;
+      }
+      if( $line eq '' || $line=~/^\s*$/ ){
+         $conf[$i]=''; # emply line
+         next;
+      }
+      if( $line=~/^\s*(.*\S)\s*$/ ){
+         $line=$1;
+      }
+      if( $line=~/^(\w+)\s*=\s*['"](.*?)['"]/ ){
+         if( $2=~tr/'"// ){
+            die(qq(Wrong value $1 in line $i of config file $config_file -- string parameter can't contain ' or "" within its value.));
+         }
+         $conf[$i]='$'.uc("$1")."='$2'"; # force upper case
+      }elsif( $line=~/^(\w+\s*=\s*\d+)/ ){
+         $conf[$i]='$'.uc("$1"); # force upper case 
+      }else{
+         print "Line $i ($line) in config file $config_file  is not recognizable configuration statement and was skipped\n";
+      }
+   }
+   if( $debug ){
+      print join("\n",@conf),"\n";
+   }
+   for( $i=1; $i<@conf; $i++ ){
+      next unless($conf[$i]);
+      eval($conf[$i]);
+   }
+  
+} # get_config
+
+# ===================================================================
+# softpano.pm -- Set of standard softpanorama subroutines for logging
+# ===================================================================
+sub autocommit
+{
+# parameters
+my ($archive_dir,$use_git)=@_; #Script name can be with ewxprentionpl or without. 
+#
+#  Local vars
+#
+my $build_timestamp;
+my $script_delta=1;
+my $file=$0;
+      if( ($last=rindex($0,'/'))>-1 ){ $file=substr($0,$last+1);}
+      ( ! -d $archive_dir ) && `mkdir -p $archive_dir`;
+      if(  -f "$archive_dir/$file"  ){
+         if( (-s $0 ) == (-s "$archive_dir/$file")   ){
+            `diff $0 $archive_dir/$file`;
+            $script_delta=( $? == 0 )? 0: 1;
+         }
+         if( $script_delta ){
+            chomp($build_timestamp=`date -r $archive_dir/$file +"%y%m%d_%H%M"`);
+            `mv $archive_dir/$file $archive_dir/$file.$build_timestamp`;
+         }
+      }
+      if(  $script_delta){
+         `cp -p $0 $archive_dir/$file`;
+          ($use_git) && `cd $archive_dir && git commit $archive_dir/$file`; # autocommit
+      }
+} # autocommit
+
+
+
+sub standard_options
+{
+   helpme() if exists $options{'h'};
+   if( exists($options{'d'}) ){
+      if( $options{'d'} =~/^(\d)\:(.*)$/ ){
+         $debug=$1;
+      }elsif( $options{'d'}=~/\d/ ){
+         $debug=$options{'d'};
+      }else{
+         die("Wrong value of option -d ($options{'d'}).Should be iether single digit of digit and test user like -d '2:frankj'\n\n");
+      }   
+   }    
+  
+   if( exists $options{'v'} ){
+      $channels=$options{'v'};
+      $verbosity1=substr($channels,0,1);
+      $verbosity2=(length($channels)>1)?substr($channels,1,1):$verbosity1;
+      if(  $verbosity>=0 && $verbosity<=3){
+         logme('V',$verbosity1,$verbosity2);
+      }else{
+         logme('E','The value of option v (number of parallel transfers) is outside the range 0..3. 3 assumed');
+         logme('V',3,3);
+      }
+   }
+
+   if(  exists  $options{'c'}  ){
+      $config_file=$options{'c'};
+      if( -f $config_file && -r $config_file ){
+         get_config($config_file);
+      }else{
+         abend("Config file $config_file does not exists, or does not have read permissions for the user\n\n");
+      }
+   }
+}
+
+sub logme
+# logme: Standard SP package diagnostic messages generator. Version 2.8 (Nov 1, 2020)
+{
+my ($package, $filename, $lineno) = caller;
+# two special types messages 'V' -- set verbosity and 'X' print summary. 
+   if( $_[0] eq 'V' ){
+      # set verbosity NOTE: Call logme('V') simply prints the content of the buffer. Useful in processing of options for defering messages until LOR_DIR is set. 
+      $min_msglevel1=length("WEST")-$_[1]-1; # verbosity 3 is max and means cut level is 4-3-1=0  -- the index corresponding to code 'W'
+      $min_msglevel2=length("WEST")-$_[2]-1; # same for log only (like in MSGLEVEL in mainframes ;-)
+      return;
+   }elsif( $_[0] eq 'X' ){
+      my $summary=''; # string which contains stat of how many  messages of each type were generated (including supressed).       
+      for( my $i=0; $i<=length('WEST'); $i++ ){
+         next unless( $ercounter[$i] );
+         $summary.=" ".substr('WEST',$i,1).": ".$ercounter[$i];
+      } # for
+      ( scalar(@_)>1 ) && out($_[1],"\n=== MESSAGES SUMMARY $summary ===\n");
+      if( $ercounter[1] + $ercounter[2] ){
+         out("$ermessage_db[1]\n") if $ercounter[1]>0; # reproduce all errors
+         out("$ermessage_db[2]\n") if $ercounter[2]>0; # reproduce all severe errors 
+      }
+      return;
+   } #if
+#
+# Now let's process "normal message", which should have W,E,S, or T severity code.
+#
+my $ercode=uc(substr($_[0],0,1)); # Parameter 1 -- message code. It can be several letters long, not only a single letter
+# my $ersuffix=(length($_[0])>1) ? substr($_[0],1,1):''; # suffix of error code currently is unused. 
+chomp( my $message=$_[1]); #Parameter 2 -- text of the message (see ercode -- Parameter 1 prcessed below) 
+     $message="$SCRIPT_NAME\-$ercode$lineno: $message"; # Form diagnostic message with error code, line number and the text of the message
+my   $severity=index("WEST",$ercode);
+     if( $severity==-1){
+         out($message); # informational 'I' messages and messages with wrong error code. 
+         return;
+     }
+     $ercounter[$severity]++; # Increase messages counter for given severity (supressed by verbosity setting messages are counted too)
+     return if(  $severity<$min_msglevel1 && $severity<$min_msglevel2 ); # no need to process if this is lower then both msglevels
+#----------------- Error history -------------------------
+      if( $severity > 0 ){ $ermessage_db[$severity] .= "\n\n$message";} # this DB actually can serve as a buffer during processing of options
+#--------- Message printing and logging --------------
+      # We treat separatly verbosity for log and console.
+      # Out of four legit error codes W,E,S and T, only T is unsupressable         
+      # $min_msglevel2 defines writing to SYSLOG. 3 (default) means all (Warning, Errors and Severe errors) to be printed
+      if( $severity==2 ){
+          $message=("=" x length($message))."\n".$message."\n".("=" x length($message))."\n";
+      }    
+      ($severity >= $min_msglevel1) && print STDERR "$message\n"; # warnings and errors
+      ($severity >= $min_msglevel2) && print SYSLOG "$message\n";
+ } # logme
+
+sub out
+#direct output of lines suppled as parameters
+#Unlike logme it can accept multipile lines. Use out('') for spaceline.
+{
+   for( my $i=0; $i<@_; $i++ ){
+     if( $verbosity1 ) { print STDERR "$_[$i]\n";}
+     if( $verbosity2 ) { print SYSLOG "$_[$i]\n";}
+   }  
+} # out
+
+sub abend
+#print diagnostic and terminate the script
+{
+my $message;
+my ($package, $filename, $lineno) = caller;
+   $message="$SCRIPT_NAME-T$lineno $_[0]. Exiting...\n\n";
+   out($message); # Syslog might not be available but STDERR always is 
+   exit 255;
+} # abend
+
+sub banner {
+# print banner and clean LOG_DIR
+# NON STANDARD: mode changed to '>>', timestamp changed to %y%m%d  
+my $title=$_[0]; 
+my $LOG_DIR=$_[1];
+my $LOG_RETENTION_PERIOD=$_[2];
+my $rc=( -d $LOG_DIR ) ? `find $LOG_DIR -name "*.log" -type f -mtime +$LOG_RETENTION_PERIOD -delete` : mkdir($LOG_DIR,700) ; # cleanup
+   chomp(my $timestamp=`date +"%y%m%d"`);
+   $LOG_FILE="$LOG_DIR/$SCRIPT_NAME.$timestamp.log";
+   open(SYSLOG,'>>',$LOG_FILE) || die("Fatal error: unable to open $LOG_FILE");
+   return unless $title;
+   chomp($timestamp=`date "+%y/%m/%d %H:%M"`);   
+   chomp( my $BUILD_DATE=`date -r $0 +"%y%m%d_%H%M"`);
+   $title.="( Build $BUILD_DATE ). Date: $timestamp";
+   out('',$title,"Logs are at $LOG_FILE. Type -h for help.",('=' x length($title)),'');
+}   
+
+sub mkdirs
+# sub mkdirs: create multiple directories using option -p
+{
+   foreach( @_ ){
+      next if(  -d $_);
+      system("mkdir -p $_");
+      abend("Can't create directory $_") unless ( -d $_ );
+   }
+}
+sub helpme
+{
+   open(SYSHELP,'<',$0);
+   while($line=<SYSHELP>) {
+      if ( substr($line,0,3) eq "#::" ) {
+         print substr($line,3);
+      }
+   } # for
+   close SYSHELP;
+   while(<DATA>){
+      print " $_";
+   } # while
+   exit 0;
+}
+sub getopts
+{
+my ($options_def,$options_hash)=@_;
+my ($first,$rest,$pos,$cur_opt);
+   while(@ARGV){
+      $cur_opt=$ARGV[0];
+      last if( substr($cur_opt,0,1) ne '-' );
+      if(  $cur_opt eq '--'){
+          shift @ARGV;
+          last;
+      }
+      $first=substr($cur_opt,1,1);
+      $pos = index($options_def,$first);
+      if( $pos==-1){
+         warn("Undefined option -$first skipped without processing\n");
+         shift(@ARGV);
+         next;
+      }
+      $rest=substr($cur_opt,2);
+      if( $pos<length($options_def)-1 && substr($options_def,$pos+1,1) eq ':' ){
+         # option with parameters
+         if( $rest eq ''){
+           shift(@ARGV); # get the value of option
+           unless( @ARGV ){
+              warn("End of line reached for option -$first which requires argument\n");
+              $$options_hash{$first}='';
+              last;
+           }
+           if(   $ARGV[0] =~/^-/ ){
+               warn("Option -$first requires argument\n");
+               $$options_hash{$first} = '';
+           }else{
+               $$options_hash{$first}=$ARGV[0];
+               shift(@ARGV); # get next chunk
+           }
+         }else{
+            #value is concatenated with option like -ddd
+            if( ($first x length($rest)) eq $rest ){
+               $$options_hash{$first} = length($rest)+1;
+            }else{
+               $$options_hash{$first}=$rest;
+            }
+            shift(@ARGV);
+         }
+      }else {
+         $$options_hash{$first} = 1; # set the option
+         if(  $rest eq ''){
+            shift(@ARGV);
+         }else{
+            $ARGV[0] = "-$rest"; # there can be other options without arguments after the first
+         }
+      }
+   }
+}
+__DATA__
+find: PWD,EXPANDED,-L,-exec
+rm: PWD, -r, -f
+chmod: PWD, -R
+chown: PWD, -R
