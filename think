@@ -162,13 +162,14 @@ use feature 'state';
    @action_bit=split('',$watched_command{$command});
    $infoline.='PWD: '.$ENV{'PWD'}.' ' if $action_bit[1];
    $infoline.="HOST: $HOSTNAME " if $action_bit[2];
-  
+   $danger_level=0; 
    if( exists($dangerous_options{$command}) ){
       $infoline.=parse_options();
       @check_opt=split(/:/,$dangerous_options{$command});
       foreach $opt (@check_opt){
          if( exists( $opt_list{$opt}) ){
             logme('W',"potentially dangerous option $opt specified.");
+            $danger_level++;
             $delay+=3;
          }
       }
@@ -187,7 +188,7 @@ use feature 'state';
          say 'ARGUMENTS: ',$arg_list;
       }  
    }
-   if( $action_bit[4]==1 ){
+   if( $action_bit[4]==1 && $danger_level ){
       if( $command eq 'find' ){
          parse_find();
          say `$command $arg_list`;   
