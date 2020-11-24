@@ -46,9 +46,10 @@
 # 4.50  2020/11/19  Bezroun   Midnight command favorites generation now is optional (you need to specify option -m to enable it)
 # 4.51  2020/11/23  Bezroun   Correction for the generation of cd-, cd--, cd---,cd-4, cd-5...aliases
 # 4.52  2020/11/24  Bezroun   Help screen added accesible via dir_favorites.pl -h 
+# 4.60  2020/11/25  Bezroun   Two optimizations: (1)if directory unchanged end processing; (2) if history is less 2000 entries do not truncate it
 #======================================================================================
 
-   $VERSION='4.51'; # Nov 19, 2020
+   $VERSION='4.60'; 
    $debug=0;
    $HOME=$ENV{'HOME'};
    chomp($HOST=`hostname -s`);
@@ -69,7 +70,7 @@
 # Process static favorite list; create exclution array so that those directories did not clutter the list of frequently used directores (%ignore) 
    
    $dir_favorites="$HOME/.config/dir_favorites.$HOST";
-   if( -f $dir_favorites ){
+   if( -f $dir_favorites ) { 
       open (SYSIN,'<',$dir_favorites);
       $i=0;
       while (<SYSIN>) {
@@ -79,9 +80,9 @@
          $ignore_dups{$_}=1;
          $static_fav[$i++]=$_;
       }
-      close SYSIN;
-      
-   }
+      close SYSIN; 
+   }   
+   
 #
 # Process dynamic part of the favorite list
 # emulating open (SYSIN, "uniq $HOME/.config/dir_history | sort | uniq -c | sort -rn | cut -c 9- | tac |");
@@ -93,7 +94,9 @@
    while($d=<SYSIN>) {
        $raw_hist[$m++]=$d;
    }
-   if(scalar(@raw_hist)>1000){
+   exit 0 if scalar($raw_hist)<=3 || $raw_hist[-1] eq $raw_hist[-2]; # directory unchanged. 
+   
+   if(scalar(@raw_hist)>2000){
       # we need to rewrite dir histrory truncating it 
       splice(@raw_hist,0,scalar(@raw_hist)-1000); # tail of last 1K lines
       open(SYSOUT,'>',"$HOME/.config/dir_history") || die("Can't open $HOME/.config/dir_history for writing\n");
