@@ -1,4 +1,4 @@
-#!/usr/bin/bash
+   #!/usr/bin/bash
 # Intelligent cd. 
 #
 # Copyright Nikolai Bezroukov 2007-2020
@@ -35,7 +35,7 @@
 # 0.30  2008/06/01  Bezroun   dir_favorites is now integrated
 # 0.40  2009/09/10  Bezroun   generation now includes aliases cd-- cd-- and cd-3
 # 1.00  2020/11/19  Bezroun   .config is now used for static favorites and temp files
-# 1.10  2020/11/23  Bezroun   Polishing before publishing 
+# 1.10  2020/11/23  Bezroun   dir_favorites optimized and now called each time from my_prompt
   
 #---------------------------------------------------------------
 export PROMPT_COMMAND='my_prompt' # should be  moved to /bash_profile/.bashrc 
@@ -68,10 +68,9 @@ function go {
    fi   
    
 }
-#
-# Writes current dir into DIRHISTORY
-#
 function my_prompt
+# Writes current dir into DIRHISTORY
+# Add option -m to dir)favorites call, if you use Midnght Commander and wish to have dynamic directory favorites listing
 {
    local EXIT_STATUS=$?
    if [ ! -d "$HOME/.config" ] ; then
@@ -87,30 +86,26 @@ function my_prompt
    color_red_bold="\[\e[31;1m\]"
    color_blue_bold="\[\e[34;1m\]"
    color_none="\[\e[0m\]"
-   echo `date +"%y/%m/%d %H:%M:%S"` "$PWD ============================$HOSTNAME" 
-   local ps1_status ps1_user_color       
-               
-   if (( $EXIT_STATUS != 0 )); then
-       ps1_status="${color_yellow}[$EXIT_STATUS]${color_none} "
-   else
-       ps1_status="[0]"
-   fi
-                                             
-   if [[ `whoami` = "root" ]]; then
-      ps1_user_color=${color_red_bold}
-    else
-      ps1_user_color=${color_blue_bold}
-   fi
-   # export PROMPT_DIRTRIM=3 control number of directories to disply in PS1 \w                                                             
-   local name=`hostname -s`
-   PS1="${ps1_status}${ps1_user_color}\\u@$name:${color_none} \\$ "
    
-   mod=$(( `date +%s` % 5 ))
-   if (( $mod == 0 )) ; then  
-      #echo Updating favorites each time we have  number of sec divisible by 5
-      perl $HOME/bin/dir_favorites.pl -m > $HOME/.config/dir_current.tmp; . $HOME/.config/dir_current.tmp      
-   fi
+   local ps1_status ps1_user_color    
+   local HOST=`hostname -s`                                          
+   if [[ `whoami` = 'root' ]]; then 
+      if (( $EXIT_STATUS != 0 )); then
+          ps1_status="${color_yellow}[$EXIT_STATUS]${color_none} "
+      else
+          ps1_status='[0]'
+      fi
+      echo `date +"%y/%m/%d %H:%M:%S"` "$PWD ======= root@$HOST"       
+      PS1="$ps1_status$color_red_bold\\u@$HOST:$color_none \\$ "
+   else
+      export PROMPT_DIRTRIM=3 # export PROMPT_DIRTRIM=3 control number of directories to disply in PS1 \w  
+      export PS1='[$EXIT_STATUS]\u@\h:\w\$ '
+   fi                                                      
+  
+   #echo Updating favorites 
+   perl $HOME/bin/dir_favorites.pl > $HOME/.config/dir_current.tmp; . $HOME/.config/dir_current.tmp    
 }
+
 #----------------------------- ncd imitation
 # Provide short one letter abberiation and long multiletter abbreviation separated by space
 function fcd 
