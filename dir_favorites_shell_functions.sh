@@ -38,6 +38,7 @@
 # 1.10  2020/11/23  Bezroun   Polishing before publishing 
   
 #---------------------------------------------------------------
+export PROMPT_COMMAND='my_prompt' # should be  moved to /bash_profile/.bashrc 
 function go {
    if (( $# > 0 )); then 
       fcd $@

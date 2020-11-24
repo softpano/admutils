@@ -57,7 +57,8 @@
 #++ 0.50  2020/11/16   BEZROUN   Parameters for several utilities are partially analyzed
 #++ 0.60  2020/11/17   BEZROUN   Option to list the affected files implemented
 #++ 0.70  2020/11/18   BEZROUN   Format of config files extended to include potencially dangerious options
-#++ 0.71  2020/11/23   BEZROUN   Help screen improved (type help -h to see it) 
+#++ 0.71  2020/11/20   BEZROUN   Help screen improved (type help -h to see it) 
+#++ 0.72  2020/11/23   BEZROUN   LS action improved (all options now are discarded, only arguments used) 
 # ------------------------------------------ START --------------------------------------------
 
 use v5.10.1;
@@ -65,7 +66,7 @@ use warnings;
 use strict 'subs';
 use feature 'state';
   
-   $VERSION='0.71';
+   $VERSION='0.72';
    $debug=0;
    $SCRIPT_NAME='think';
    chomp($HOSTNAME=`hostname -s`);   # we will always use short hostname in diagnistic messages
@@ -108,8 +109,8 @@ use feature 'state';
 # 4th  letter -- expanded command
 # 5th         -- options analysis 
 %catalog=('PWD'=>1,'HOST'=>2,'EXPANDED'=>3,'LS'=>4); 
-%benigh_commands=('cd'=>'0','echo'=>'0','cat'=>'0','head'=>'0','tail'=>'0','ls'=>'0','tree'=>'0', #benigh commands
-   'mc'=>'0','ll'=>'0','file'=>'0','which'=>'0','wc'=>'0',); #benigh commands
+#%benigh_commands=('cd'=>'0','echo'=>'0','cat'=>'0','head'=>'0','tail'=>'0','ls'=>'0','tree'=>'0', #benigh commands
+#   'mc'=>'0','ll'=>'0','file'=>'0','which'=>'0','wc'=>'0',); #benigh commands
 %watched_command=(  
    'reboot'=>'70100','shutdown'=>'70100','halt'=>'70100', # dangerous commands (assidental reboot type of errors) 
    'rm'=>'31001','find'=>'31001','chmod'=>'31001','chown'=>'31001', #dangerous commands
@@ -161,33 +162,40 @@ use feature 'state';
    @action_bit=split('',$watched_command{$command});
    $infoline.='PWD: '.$ENV{'PWD'}.' ' if $action_bit[1];
    $infoline.="HOST: $HOSTNAME " if $action_bit[2];
-   if( $action_bit[3]==2 ){
-      $infoline.="EXPANDED COMMAND: $original_command " if $action_bit[3];
-   }elsif( $action_bit[3]==1 ){
-      $infoline.=scalar(@ARGV)." options and arguments";
-   } 
-
-   if( exists($dangerious_options{$command} ){
+  
+   if( exists($dangerous_options{$command}) ){
       $infoline.=parse_options();
       @check_opt=split(/:/,$dangerous_options{$command});
       foreach $opt (@check_opt){
          if( exists( $opt_list{$opt}) ){
-            $infoline.=" WARNING: potentially dangerious option $opt specified.";
+            logme('W',"potentially dangerous option $opt specified.");
             $delay+=3;
          }
       }
-      foreach $arg (keys(%arg_list)){
-         $infoline.=$arg_list{$arg};
+      foreach $arg (keys(%arg_hash)){
+         logme('W',$arg);
          $delay+=3;
       }
       
    }
    say $infoline;
-   say "(if correct resubmit with the \\(backslash) as prefix in $delay sec)";
-   logme('I', $infoline);
+   if( $action_bit[3] ){
+      say "EXPANDED COMMAND: $original_command "
+   }  
    if( $action_bit[3]==1 ){
-      `ls -l `.join(' ',@ARGV;
+      if( $command ne 'find' ){
+         say 'ARGUMENTS: ',$arg_list;
+      }  
+   }
+   if( $action_bit[4]==1 ){
+      if( $command eq 'find' ){
+         parse_find();
+         say `$command $arg_list`;   
+      }else{   
+        `ls -la $arg_list`;
+      }  
    } 
+   say "(if the command looks correct resubmit with the \\(backslash) as prefix in $delay sec)";
    `sleep $delay`;
    if( $debug ){
       say "DEBUG INFO: delay=$delay","Expanded command: ",$original_command;
@@ -199,20 +207,56 @@ sub parse_options
 #
 # Loop for processing options. Detect if we are used -r -R ot -f. 
 #
+   $arg_list='';
    for( my $i=0; $i<@ARGV; $i++ ){
       $p=$ARGV[$i];
-      if( substr($p,0,1) eq '-' ){
+      next if ($p eq '-');
+      if( length($p)>1 && substr($p,0,1) eq '-' ){
          $opt_list{$p}=1;
          next;
-      }elsif($p eq '/'){
-         $arg_list{'/')=" Argument / found. Possible typo";
-      }elsif($p eq '.'){
-         $arg_list('.')=" Argument . found. ";
-      }elsif(substr($p,4) eq '/etc'){
-         $arg_list('/etc')=" Argument starting with /etc found.";
-      }         
+      }      
+      if( $p eq '/' ){
+         $arg_hash{'/'}=" Argument / found. Possible typo";
+      }elsif( $p eq '.' ){
+      $arg_hash{'.'}=" Argument . found. ";
+      }elsif( length($p)>4 && substr($p,4) eq '/etc'){
+         $arg_hash{'/etc'}=" Argument starting with /etc found.";
+      } 
+      if( $p=~tr/ \t\n'{}()*&|// ){
+         $arg_list.=' "'.$p.'"';
+      }else{
+         $arg_list.=' '.$p;
+      }        
    } # for
-}   
+} 
+sub parse_find
+{
+#
+# Loop for processing options. Detect if we are used -r -R ot -f. 
+#
+   $arg_list='';
+my $i=0;
+   while( $i<@ARGV ){
+      $p=$ARGV[$i];
+      if( $p eq '-delete' ){
+         $p='-ls';
+      }elsif( $p eq '-exec' ){
+         $i++;
+         while($ARGV[$i] ne ';'){
+            $i++;
+         }
+         $arg_list.=' -ls'; 
+         $i++;
+         next;
+      }   
+      if( $p=~tr/ \t\n'{}()*&|// ){
+         $arg_list.=' "'.$p.'"';
+      }else{
+         $arg_list.=' '.$p;
+      }        
+      $i++;
+   } # for
+}
 sub get_config
 {
 my $config_file=$_[0];
@@ -233,7 +277,7 @@ my ($line,$i);
          if( $element=~/\d/){
             substr($instruction,0,1)=$element; # pause
          }elsif( substr($element,0,1) eq '-' ){
-            if( exists($dangerous_options{$name} ){
+            if( exists($dangerous_options{$name}) ){
                $dangerous_options{$name}.=':'.$element; # add 
             }else{
                $dangerous_options{$name}=':'.$element;
@@ -248,7 +292,7 @@ my ($line,$i);
       }   
       $watched_command{$name}=$instruction;
    }
-#  second pass -- varibles only    
+#  second pass -- variables only    
    for( $i=1; $i<@conf; $i++ ){
       chomp($line=$conf[$i]);
       if( substr($line,0,1) eq '#' ){
@@ -520,7 +564,7 @@ my ($first,$rest,$pos,$cur_opt);
    }
 }
 __DATA__
-find: PWD,EXPANDED,-L,-exec
-rm: PWD, -r, -f
-chmod: PWD, -R
-chown: PWD, -R
+find: PWD,LS,-L, -exec -delete
+rm: PWD,LS, -r, -f, 
+chmod: PWD,LS -R,-L
+chown: PWD,LS -R,-L

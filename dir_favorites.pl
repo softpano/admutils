@@ -1,10 +1,35 @@
-#!/usr/bin/perl
-# dir_favorites.pl -- process favorites and create aliases for the most used directories
-# Copyright Nikolai Bezroukov 2007-2020
-# Licensed under the original BSD license
-#
-# static list of favorites is $HOME/.config/dir_favorites.$HOST
-#
+!/usr/bin/perl
+#:: dir_favorites.pl -- process favorites and create aliases for the most used directories
+#:: Copyright Nikolai Bezroukov 2007-2020. Licensed under the original BSD license
+#::
+#:: The utility creates a history of accessed directories and a set of aliases such as cd--, cd---, cd-4...
+#:: It requires the usage of custom prompt function (provided as my_prompt in dir_favorites_shell_functions.sh.) 
+#:: which should be referenced in .bash_profile/.bashrc as:
+#::              export PROMPT_COMMAND='my_prompt'
+#::
+#:: Favorites are stored in Bash directory stack accessible by dirs command.
+#::
+#:: Generated list of directory favorites consists of two parts -- static (loaded from a file  $HOME/.config/dir_favorites.$HOSTNAME ) 
+#:: and dynamic (created directly from the history of visited directories ). 
+#::
+#:: The utility also dynamically generates aliases extending cd - capabilities such as cd--, cd---, cd-4, cd-5 and so on
+#::
+#:: It is intended to be used not directly but via function go, which is also provided in dir_favorites_shell_functions.sh
+#::
+#::--- INVOCATION 
+#::    . ~/bin/dir_favorites_shell_functions.sh
+#::    go
+#:: NOTE: Generally it is recommended to move the command export PROMPT_COMMAND='my_prompt' to .bash_profile/.bashrc
+#::
+#:: If it is invoked with option -m the utility also changes directory favorites in MC (Midnight commander) providing dynamic updates. 
+#:: Like with directory favorites accessible via function go, mc hotlist consist of two parts -- static and dynamic, 
+#:: but the dynamic part is larger (21 entry)
+#::
+#:: The static list of favorites is stored in the file $HOME/.config/dir_favorites.$HOST and can be modified using mcedit. 
+#::
+#:: I recommend to create two functions (for example f, F) with one adding the current directory to the static list of directory favorites
+#:: and another evoking mcedit on static favorite list, allowing to edit it from within MC. 
+#::
 #--- Development History
 #
 # Ver      Date        Who        Modification
@@ -12,14 +37,15 @@
 # 1.00  2007/07/02  Bezroun   Initial implementation
 # 2.00  2008/09/16  Bezroun   Alias generation added
 # 3.00  2013/04/17  Bezroun   Pipe is replaced with internal processing
-# 4.00  201910/19   Bezroun   Integration with Midnight commander added
+# 4.00  2019/10/19  Bezroun   Integration with Midnight Commander added
 # 4.10  2019/10/30  Bezroun   Some errors corrected. Logic improved
 # 4.20  2019/10/31  Bezroun   Fading of favorites based on line number implemented; older frequently used directory now have less weight 
-# 4.21  2019/10/31  Bezroun   Empty entries are now excluded 
+# 4.21  2019/10/31  Bezroun   Empty entries are now excluded. History is limited to the last 1000 lines. 
 # 4.30  2019/11/07  Bezroun   Comments in static favorites in MC are allowed 
-# 4.40  2020/11/18  Bezroun   History is now truncated to 1000 most recent items on each invocation
+# 4.40  2020/11/18  Bezroun   Method of sorting the directory history changes and the logic revised.
 # 4.50  2020/11/19  Bezroun   Midnight command favorites generation now is optional (you need to specify option -m to enable it)
-# 4.51  2020/11/19  Bezroun   Correction for the generation of cd-0 .. -cd-9 and cd- cd-- and cd--- aliases
+# 4.51  2020/11/23  Bezroun   Correction for the generation of cd-, cd--, cd---,cd-4, cd-5...aliases
+# 4.52  2020/11/24  Bezroun   Help screen added accesible via dir_favorites.pl -h 
 #======================================================================================
 
    $VERSION='4.51'; # Nov 19, 2020
@@ -32,8 +58,12 @@
 #
 # Check if we need to change midnight commander favorites
 #
-   if ( scalar(@ARGV)>0 && $ARGV[0] eq '-m' ){
-      $mc_fav_flag=1;
+   if ( scalar(@ARGV)>0 ){
+     if( $ARGV[0] eq '-m' ){
+        $mc_fav_flag=1;
+     }elsif(  $ARGV[0] eq '-h' ){ 
+        helpme();
+     }   
    }   
 #
 # Process static favorite list; create exclution array so that those directories did not clutter the list of frequently used directores (%ignore) 
@@ -84,13 +114,14 @@
 # Generate cd-1 cd-2 type of aliases traversing @history fron the last to the (last -h) element
 #
    $h=($#history>7) ? 7 : $#history-1;
-   $k=1;
+   $k=1;   
    for ($i=$#history; $i>$#history-$h; $i--) {
-      print "alias cd-$k='cd $history[$i]'\n"; # generate aliases cd-1, cd-2  NOTE: History should be indexed by $i, while alias by k
       if( $k<=3 ){
-        # only three last directories
+        # only three last directories. NOTE: History should be indexed by $i, while alias by k
         print 'alias cd'.('-' x $k)."='cd $history[$i]'\n"; # generate aliases cd-, cd--  and cd---
-      } 
+      }else{
+         print "alias cd-$k='cd $history[$i]'\n"; # generate aliases cd-4, cd-5...  
+      }   
       ++$k;
    }#for
 
@@ -151,3 +182,16 @@
    # close SYSDIR;
 
 exit 0;
+
+sub helpme
+#print help screen 
+{
+   open(SYSHELP,'<',$0);
+   while($line=<SYSHELP>) {
+      if ( substr($line,0,3) eq "#::" ) {
+         print substr($line,3);
+      }
+   } # for
+   close SYSHELP;
+   exit 0;
+}
