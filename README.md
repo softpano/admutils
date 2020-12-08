@@ -20,8 +20,11 @@ So if you type the command reboot the utility will print the HOSTNAME of the ser
 
 **Nov 23, 2020**  *soft_reboot*  -- reboots the server only after a given period since the last reboot( by default 90 days) expires, selecting a moment when the server does not run any jobs, as shown by uptime.  Useful for computational cluster nodes, especially if some applications suffer from memory leaks. 
 
-**Nov 23, 2020**  *dir_favorites.pl*  Help to create a usable history of directory favorites. It requires the usage of custom prompt function (provided in  dir_favorites_shell_functions.sh.)  Favorites are stored in stored in stack accessible by dirs command and consist of two parts -- static (loaded from a file  $HOME/.config/dir_favorites.$HOSTNAME ) and dynamic (created from history). The utility also dynamically generates aliases such as cd--, cd---, cd-4, cd-5 and so on as well as via function go also provided in dir_favorites_shell_functions.sh
-If it is invoked with option -m also  changes directory favories in MC (Midnight commander)  providing dynamic updates. In this case mc hotlist consist of two parts -- static and dynamic. 
+**Nov 23, 2020**  *dir_favorites.pl*  Help to create a usable history of directory favorites. It requires the usage of custom prompt function (provided in  dir_favorites_shell_functions.sh.)   
+
+Favorites are stored in stored in stack accessible by dirs command and consist of two parts -- static (loaded from a file  $HOME/.config/dir_favorites.$HOSTNAME ) and dynamic (created from history). The utility creates a history of accessed directories and a set of aliases such as cd--, 3rb for root/bin,  2esn for /etc/sysconfig/network-scripts. You got the idea. 
+
+If it is invoked with option -m also changes directory favories in MC (Midnight commander) providing dynamic updates. In this case mc hotlist consist of two parts -- static and dynamic. See HTML page for infomation. 
 
 
 **Nov 05, 2020**  *dirhist* utility was posted. Provides the history of changes in one or several directories.
