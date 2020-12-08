@@ -1,4 +1,4 @@
-   #!/usr/bin/bash
+#!/usr/bin/bash
 # Intelligent cd. 
 #
 # Copyright Nikolai Bezroukov 2007-2020
@@ -35,42 +35,42 @@
 # 0.30  2008/06/01  Bezroun   dir_favorites is now integrated
 # 0.40  2009/09/10  Bezroun   generation now includes aliases cd-- cd-- and cd-3
 # 1.00  2020/11/19  Bezroun   .config is now used for static favorites and temp files
-# 1.10  2020/11/23  Bezroun   dir_favorites optimized and now called each time from my_prompt
-  
+# 1.10  2020/11/23  Bezroun   dir_favorites optimized and now called each time 
+# 2.00  2020/12/07  Bezroun   the dir_favorites.pl now write a file not put aliases if dirs directive into STDOUT
 #---------------------------------------------------------------
-export PROMPT_COMMAND='my_prompt' # should be  moved to /bash_profile/.bashrc 
 function go {
    if (( $# > 0 )); then 
       fcd $@
       return
-   fi   
+   fi
     
-   perl $HOME/bin/dir_favorites.pl -m > $HOME/.config/dir_current.tmp 
-   . $HOME/.config/dir_current.tmp
+   perl $HOME/bin/dir_favorites.pl -m 
+   . $HOME/.config/dir_current.sh
    dirs -v
-   echo -n 'Select favorite (postive counting from top, negative from bottom) or copy the path: '
+   echo -n 'Select directory by the number (negative from bottom) or copy and edit the path: '
    read target
-   echo $target
+   #echo $target
    if [[ $target =~ '/' ]]; then 
       #echo absolute
       cd $target
    else
       #echo numeric 
       if (( target < 0 )); then
-         echo $target
+         #echo $target
          mydir=`dirs -l $target`
          cd $mydir
       elif (( target > 0 )); then
-         echo +$target
+         #echo +$target
          mydir=`dirs -l +$target`
          cd $mydir
       fi   
    fi   
    
 }
-function my_prompt
+#
 # Writes current dir into DIRHISTORY
-# Add option -m to dir)favorites call, if you use Midnght Commander and wish to have dynamic directory favorites listing
+#
+function my_prompt
 {
    local EXIT_STATUS=$?
    if [ ! -d "$HOME/.config" ] ; then
@@ -80,14 +80,12 @@ function my_prompt
    history -a #Append the history lines entered since the beginning of the current Bash session to the history file. 
    history -c #clean history 
    history -r #reread from the file
-   pwd >> "$HOME/.config/dir_history"
    history 1 >> $HOME/.bash_eternal_history #  # attempt to deal with multiple session, which do not write to history -- NNB, Oct 27, 2019. 
    color_yellow="\[\e[33;40m\]"
    color_red_bold="\[\e[31;1m\]"
-   color_blue_bold="\[\e[34;1m\]"
-   color_none="\[\e[0m\]"
-   
-   local ps1_status ps1_user_color    
+   #color_blue_bold="\[\e[34;1m\]"
+   color_none="\[\e[0m\]"   
+   local ps1_status   
    local HOST=`hostname -s`                                          
    if [[ `whoami` = 'root' ]]; then 
       if (( $EXIT_STATUS != 0 )); then
@@ -98,14 +96,18 @@ function my_prompt
       echo `date +"%y/%m/%d %H:%M:%S"` "$PWD ======= root@$HOST"       
       PS1="$ps1_status$color_red_bold\\u@$HOST:$color_none \\$ "
    else
-      export PROMPT_DIRTRIM=3 # export PROMPT_DIRTRIM=3 control number of directories to disply in PS1 \w  
+      export PROMPT_DIRTRIM=3 # control number of directories to disply in PS1 \w 
       export PS1='[$EXIT_STATUS]\u@\h:\w\$ '
-   fi                                                      
-  
-   #echo Updating favorites 
-   perl $HOME/bin/dir_favorites.pl > $HOME/.config/dir_current.tmp; . $HOME/.config/dir_current.tmp    
-}
+   fi
 
+   old=`tail -1 $HOME/.config/dir_history`
+   if [[ "$PWD" = "$old" ]]; then 
+      return; # the current directory was not changed 
+   fi   
+   pwd >> "$HOME/.config/dir_history"
+   perl $HOME/bin/dir_favorites.pl -m 
+   . $HOME/.config/dir_current.sh    
+}
 #----------------------------- ncd imitation
 # Provide short one letter abberiation and long multiletter abbreviation separated by space
 function fcd 
