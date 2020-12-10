@@ -38,6 +38,7 @@
 # 1.10  2020/11/23  Bezroun   dir_favorites optimized and now called each time 
 # 2.00  2020/12/07  Bezroun   the dir_favorites.pl now write a file not put aliases if dirs directive into STDOUT
 #---------------------------------------------------------------
+export PROMPT_COMMAND='my_prompt'
 function go {
    if (( $# > 0 )); then 
       fcd $@
