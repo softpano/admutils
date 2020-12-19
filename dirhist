@@ -6,18 +6,31 @@
 #:: Copyright by Nikolai Bezroukov, 2010-2020 
 #:: Released under Perl Artistic License
 #::
-#:: Designed to be run from cron Daily or hour invocations. After each invocation mail report to selected emeil addresses about changes found 
-#:: As all generation of config file, for example, in ./etc/ are preserved it can be helpful for a forensic investigation. 
-#:: It is very useful in case multiple sysadmin change /etc files.  
-#:: It was actually written after one such SNAFU happened about 10 years ago. 
+#:: Thus utility creates a directory (the default is /var/Dirhist_base ) and a subdirectory for each watched directories in it.
+#::
+#:: As this utility normally runs from cron the excluded and  eatched fioela re specified in two files
+#::  
+#::  /var/Dirhist_base/dirhist_ignore.lst 
+#::  /var/Dirhist_base/dirhist_watch.lst
+#::  
+#:: Those can be changed via the configuration file via optiox -x and -w  
+#::
+#:: For a test run on a certain directory you can specify the directory (or serveral directories) is argumnents to the program
+#:: in this case no excluded files or watched files can be specified becuase they contain the list directories in thie own right. 
+#::
+#:: All files which can be set via options also can be set via config file with setting YAMP-stle dictionary format 
+#::
+#:: Typically runs from cron using Daily or hour invocations. After each run it  creates the history of changes in watched directories 
+#:: which is helpful for a forensic investigation. The classic example is conflicting actions of multiple sysadmin on /etc/files. 
+#:: which led to SNAFU.  Or your own misguided actions.  
 #:: 
-#:: Can be used for recovery of configuration files. 
-#:: For example, when you accidentally propagate authentication related files (passwd, groups, shadow) from RHEL6 to RHEL 7 wiping out file in etc. 
+#:: Also can be used for recovery of changed/botched configuration files. 
+#:: For example, when you accidentally propagate authentication related files (passwd, groups, shadow) from RHEL6 to RHEL 7.
 #::
 #:: --- Invocation
 #::       dirfile <options> [<directory>]
 #:: 
-#:: NOTE: If argument is given it is interpreted as the directory and both ignore and watch files are ignored, even if specified. Useful mainly for tecting 
+#:: NOTE: If argument is given it is interpreted as the directory and both ignore and watch files are ignored, even if specified 
 #::
 #:: --- OPTIONS:
 #::
@@ -64,21 +77,23 @@
 #++ 1.11  2020/11/05   BEZROUN   Error with processing comments in config files fixed.  
 #++ 1.20  2020/11/12   BEZROUN   Default location of mail_list and processing of option -m changed  
 #++ 1.21  2020/11/16   BEZROUN   mail_list fixes reverted 
-#++ 1.22  2020/11/23   BEZROUN   Additional testing and some minor fixes of documentation. 
+#++ 1.22  2020/11/16   BEZROUN   Error with processing enpy lines fixed
+#++ 1.30  2020/11/17   BEZROUN   If watched file list is absent, the file is created from __DATA__ file
+#++ 1.31  2020/11/18   BEZROUN   Mode 700 for BASE_DIR enforced
 # ------------------------------------------ START --------------------------------------------
 use v5.10.1;
 use feature 'state';
 use warnings;
 use strict 'subs';
 
-   $debug=0;
-   $test_file='';
-   $VERSION='1.22'; ;
+   $debug=0;   
+   $VERSION='1.30'; ;
    $SCRIPT_NAME='dirhist';
    chomp($today=`date +"%y%m%d_%H%M"`);
    chomp($HOSTNAME=`hostname -s`);   # we will always use short hostname in diagnistic messages
    set_utils();
    $HOME=$ENV{'HOME'};
+   $test_file='';
      
 #
 # Initialization for logme
@@ -90,14 +105,18 @@ use strict 'subs';
 #
 # Default Parameters including BASE and LOG_DIR
 #
+   $LOG_RETENTION_PERIOD=365;  #CONFIG-ELIGIBLE: Number of day logs are kept in the LOG_DIR directory. The default is 365 days (one year)
    $MAIL_LIST='';                                       #CONFIG-ELIGIBLE: the list of comma separated email addressed to send the log  
    $BASE='/var/'.ucfirst($SCRIPT_NAME).'_base';         #CONFIG-ELIGIBLE: directory for tar files and generation of changed files 
    $EXCLUDED_FLIST="$BASE/$SCRIPT_NAME".'_ignore.lst';  #CONFIG-ELIGIBLE: the file with the list of excluded file and subdirectories for each watched firectory   
    $WATCHED_FLIST="$BASE/$SCRIPT_NAME".'_watch.lst';    #CONFIG-ELIGIBLE: the file with the list of watched file and subdirectories for each watched firectory  
    $WATCHED_DIRS='';
    $LOG_DIR="$BASE/Logs"; #CONFIG-ELIGIBLE:  The directory for logs. The default is /var/Dirhist_base
-   `mkdir -p -m 700 $LOG_DIR` unless ( -d "$LOG_DIR" );
-   $LOG_RETENTION_PERIOD=365;  #CONFIG-ELIGIBLE: Number of day logs are kept in the LOG_DIR directory. The default is 365 days (one year)
+   unless ( -d "$LOG_DIR" ){
+      mkdirs($LOG_DIR);
+      `chmod 700 $BASE`; # -p enforces mode only for the last directory, not for the whole path
+   }
+   
 #
 #  Process config file, if any 
 #
@@ -110,7 +129,6 @@ use strict 'subs';
    if( $WATCHED_DIRS ){
       $WATCHED_DIR_LIST=split(/,?\s+/,$WATCHED_DIRS)
    } 
-
 #
 # Process options, if any 
 #   
@@ -124,7 +142,6 @@ use strict 'subs';
       }   
       `mkdir -p -m 700 $LOG_DIR` unless ( -d "$LOG_DIR" );      
    }
-
       
    banner(ucfirst($SCRIPT_NAME)." -- Syncronization of user accouns for classic Unix authentication files), Version $VERSION",$LOG_DIR,$LOG_RETENTION_PERIOD);
    standard_options(); 
@@ -162,13 +179,12 @@ use strict 'subs';
       }         
    } 
    
-   if (scalar($ARGV)>0) {
+   if (scalar(@ARGV)>0) {
       if ( -d $ARGV[0]){
          $WATCHED_DIR_LIST=@ARGV
       }
       $EXCLUDED_FLIST=$WATCHED_FLIST='';      
-   }   
-  
+   }    
 
 #
 # Exclusions should be prefixed by the directory in question. Comparison is via index function, not via regex
@@ -185,8 +201,12 @@ use strict 'subs';
          last;
       }
       $line=<SYSIN>;
-      while($line ne undef  ){                
-         chomp $line;         
+      while($line){
+         chomp $line;
+         if($line =~/^\s*$/){
+            $line=<SYSIN>;
+            next;
+         }        
          if( $line=~/^\S/ ){
             if( substr($line,0,1) eq '#'){
                $line=<SYSIN>;
@@ -219,20 +239,28 @@ use strict 'subs';
                   if( -f $element_with_path){ 
                     $IGNORED_FILE{$element_with_path}=1;
                   }else{
-                    logme('W',"The file $element_with_path that you want to watch does not exist on the server or is a symlink \n");
+                    logme('W',"The file $element_with_path that you want to watch does not exist on the server or is a symlink");
                   } 
                }            
             }
             $line=<SYSIN>;
-            last if ($line eq undef);
+            last unless($line);
          }
      } #while;
    }else{
-      logme('E',"No excluded files is used in this run\n");     
+      logme('E',"No excluded files is used in this run");     
    }  
 #
 # Selected specially watched files -- IMPORTANT file list
 #
+   unless( -f $WATCHED_FLIST){
+      logme('E',"No watched filelist detected. Creating file $WATCHED_FLIST from default"); 
+      open(SYSIN,'>',$WATCHED_FLIST) || abend("Can't open the file $BASE/files2report.lst for reading");
+      while(<DATA>){
+        print SYSIN $_;
+      }
+      close SYSIN;      
+   }   
    if( $WATCHED_FLIST && -f $WATCHED_FLIST){
       open(SYSIN,'<',$WATCHED_FLIST) || abend("Can't open the file $BASE/files2report.lst for reading");
       $watch_no=0;
@@ -244,8 +272,12 @@ use strict 'subs';
          last;
       }
       $line=<SYSIN>;
-      while($line ne undef  ){                
-         chomp $line;         
+      while($line){                
+         chomp $line;    
+          if($line =~/^\s*$/){
+            $line=<SYSIN>;
+            next;
+         }
          if( $line=~/^\S/ ){
             if( substr($line,0,1) eq '#'){
                $line=<SYSIN>;
@@ -286,7 +318,7 @@ use strict 'subs';
                   }            
                }
                $line=<SYSIN>;
-               last if ($line eq undef);
+               last unless($line);
             }
             $ref_watched_file=\%CRITICAL_FILE;
             $ref_watched_dir=\%CRITICAL_DIR;  
@@ -294,9 +326,8 @@ use strict 'subs';
       } #while
    }else{
       logme('E',"No watched files/dirs  config file ( $WATCHED_FLIST ) was used in this run\n");     
-   }      
+   }     
   
-   
 #
 # MAIN LOOP
 #   
@@ -310,7 +341,7 @@ my $ChangedWatchedLst='';
       $rc=process_dir(); # now process this directory
       $alert_no+=$rc;
    }
-   close SYSLOG; # Close log to make possible emailing to recipients.  
+   
 
    if ($alert_no>0) {
       logme('I',"There are $alert_no changes in watched files and directories'"); 
@@ -321,11 +352,13 @@ my $ChangedWatchedLst='';
          $ChangedWatchedLst=substr($ChangedWatchedLst,0,$last_blank).' ... ';
       }   
       if ($mail_list) {
+          close SYSLOG; # Close log to make possible emailing to recipients.
          ($max_msglevel==0) && print "Report mailed to $MAIL_LIST";
          `cat $LOG_FILE | mail -s "$HOSTNAME Dirhist report about $alert_no changed file(s): $ChangedWatchedLst" "$MAIL_LIST"`;
       }     
       logme('X','');
-   } 
+   }  
+    
    exit $alert_no; 
   
 sub process_dir
@@ -386,8 +419,7 @@ my $TarballName=substr($SelectedDir,1); # name without extention .tar
          $what_changed{$file} = "$what";
       }
    }
-   
-   
+  
 my $changed_watched_file_no=0; #total number of changed files classified as "watched" or residing in the watched directories  
    foreach $file ( keys %what_changed ){
       $is_changed=0;
@@ -548,16 +580,15 @@ sub set_utils
   $CP='/bin/cp';
   $DIFF='/usr/bin/diff';
   #$LAST='/usr/bin/last'; 
-  #$GREP='/bin/grep';
+  #$GREP='/usr/bin/grep';
   $MAIL='/bin/mail';
   if ($debug>=3) {
      $MAIL='echo';
      $MV='echo';
      $CP='echo';
      $MAIL='echo';
-  }  
-  
-}
+  }    
+} # set_utils
 
 # ===================================================================
 # softpano.pm -- Set of standard softpanorama subroutines for logging
@@ -751,8 +782,8 @@ sub mkdirs
 {
    foreach( @_ ){
       next if(  -d $_);
-      system("mkdir -p $_");
-      abend("Can't create directory $_") unless ( -d $_ );
+      system("mkdir -p -m 700 $_");
+      die("Can't create directory $_") unless ( -d $_ );
    }
 }
 sub helpme
@@ -824,16 +855,19 @@ my ($first,$rest,$pos,$cur_opt);
    }
 }
 __DATA__
-Thus utility creates a directory (the default is /var/Dirhist_base ) and a subdirectory for each watched directories in it.
-
-As this utility normally runs from cron the excluded and  eatched fioela re specified in two files
-  
-  /var/Dirhist_base/dirhist_ignore.lst 
-  /var/Dirhist_base/dirhist_watch.lst
-  
-Those can be changed via the configuration file via optiox -x and -w  
-
-For a test run on a certain directory you can specify the directory (or serveral directories) is argumnents to the program
-in this case no excluded files or watched files can be specified becuase they contain the list directories in thie own right. 
-
-All files shich can be set via iptions also can be set via config file with setting YAMP-stle dictionary format 
+#
+# Sample list of watched directories with critical files and directories in each 
+#
+/root
+     .bash_profile:.bashrc:.functions:.aliases:.mc/hotlist 
+     bin/:.config/
+/boot
+     grub2/grub.conf
+/etc 
+     fstab:group:passwd:profile:resolv.conf:hosts:yum.conf:sudoers:shells:sysctl.conf 
+     nsswitch.conf:redhat-release:mc/mc.menu
+     init.d/:profile.d/:yum.repos.d/:sysconfig/:cron.d/:cron.daily/:cron.weekly/:cron.monthly/:ntp/:profile.d/ 
+     rear/:samba/:security/:skel/:ssh/:xinetd.d/
+#/var/spool/mail
+#     root
+/var/spool/cron

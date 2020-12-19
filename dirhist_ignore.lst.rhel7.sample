@@ -1,0 +1,8 @@
+# RHEL7/CentOS7 sample of the list of files and directories to ignore 
+/etc
+   mtab:adjtime:aliases.db
+   shadow-:group-:gshadow:gshadow-:passwd-
+   lvm/cache/.cache
+/root
+    .Xauthority/:.bash_history
+        
