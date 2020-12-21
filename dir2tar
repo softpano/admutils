@@ -1,0 +1,690 @@
+#!/usr/bin/perl
+#:: dir2tar -- the script for conversion of a directory tree to tarballs with thr verification of tarball
+#:: Nikolai Bezroukov, 2019-2020 (version 2.21, Dec 20, 2020)
+#:: Licensed under Perl Artistic license
+#::
+#:: ATTENTION:
+#::     1. The current version of the script can be run only as root
+#::     2. The script should run in screen session or with nohup option as termination of session in the middle of operation can have in-desirable consequences
+#::        although will not destroy any data (destructed files on Genome folder can be recreated from the tarball as the content was verified against the tarball)
+#::     4. The script create files dir_name.manifest during its operation which contains listing of the tar archive.
+#::
+#:: The set of directories names should be provided as relative to BASE directory (the default for BASE is /home,  can be changed via parameter -b )
+#::
+#:: BASIC LOGIC OF OPERATION:
+#::     Step 1: If the tarball exist inside TARGET directory move to base directory, check if manifect exists and if not create it. This directory is cionsidered already tarred
+#::             if tarball with name TARGET_DIR.tar does not exists in the target directory or in the base directory create the tarball in the BASE directory
+#::     Step 2: Verify the created tarball using option -d of GNU tar. Abort if there are differences.
+#::     Step 3: Create manifest on the local site if it does not already exists
+#::     Step 4: Delete files in the target folder on local cluster 
+#::             (operation is performed only in debug==0 mode)
+#::     Step 5: Move the tarballs and manifest up into the target directory#::
+#::
+#:: NOTE OF OPERATION
+#::    Creation of, say, 7TB tarball from a directory requires on a sever with regular RAID5 rotating harddrives takes around 24 hours
+#::    Which means that the script should be run from sreen session or with nohup 
+#::    (verification of which against directory the tree also can take days)
+#::
+#:: INVOCATION
+#::
+#::       dir2tar <options> list_of subdirectories_in_base_to_compress
+#::       dir2tar <options> filelist 
+#::
+#:: EXAMPLES
+#::     /root/bin/dir2tar -b /Users/Former              # compress all sudirectories in /Users/Former
+#::     /root/bin/dir2tar -b /Genomes G2020*            # compress all suvirectories in /Genomes starting with G2020*
+#::     /root/bin/dir2tar -b /Genomes dir2compress.lst  # compress all suvirectories listed in file dir2compress.lst
+#::                                                     # they should specified iether as absolute path or relative to /Genomes
+#::
+#:: OPTIONS
+#::
+#::   -b -- BASE directory (relative to which target directory is specified and in which tarball will be initially created
+#::   -a -- archiver to be used. The default is pbzip2. If 0 or false specified, no compression is performed. 
+#::         you can speciufied options for archiver which will be passed "as is"
+#::   -e -- extention for the compressed file. Not needed for "known" archivers which currently include pbzip2/bzip2, pigz/gzip and pxz/xz. 
+#::   -v -- verbosity (0-3). 0 -- no messages; 1- only serious; 2 - serious and errors; 3 -serious, errors and warnings;
+#::   -l -- directory for log files (the default is /var/opt/dir2tar )
+#::   -h -- help
+#::   -d -- debug flag (0 - production mode; 1-3 -various debugging modes with additional debugging output)
+#::         Deletion of the files is performed only is script is running with debug 0 or 1.
+#::         if debug is greater then zero, the source of the script is saved in ~/Archive directory for possible GIT management
+#::
+#--- Development History
+#
+# Ver      Date        Who        Modification
+# ====  ==========  ========  ==============================================================
+# 0.10  2019/08/04  BEZROUN   Initial implementation
+# 0.20  2019/08/05  BEZROUN   if both tar files and manifest exists the directory is viewed as processed
+# 0.30  2019/08/05  BEZROUN   After tarballs are verified files in the directory are removed only if debug==0
+# 0.40  2019/08/06  BEZROUN   diff tar operation is very slow. So if we failed on diff the restart should be from this stage 
+# 0.50  2019/08/09  BEZROUN   Improvement in text of diagnostic messages and online help
+# 0.60  2019/08/10  BEZROUN   Block processing for empty directories and directory containing just tar file and manifest if debug ==0
+# 0.70  2019/08/10  BEZROUN   Multiple additional security check to protect resulting tarball in debug==0 mode
+# 0.80  2019/08/13  BEZROUN   Usage of filelist implemented
+# 0.90  2019/08/15  BEZROUN   Added starting stage parameter useful for huge files. Save very expensive tar -dvf operation 
+# 1.00  2020/12/21  BEZROUN   Adapted for RHEL/CentOS7. Support of RHEL/CentOS5 removed. pbzip2 is now default 
+# 1.10  2020/12/22  BEZROUN   if the option -a is 0 or false, no compression is performed 
+# 1.20  2020/12/23  BEZROUN   Options for archiver are now allowed 
+#=========================== START ============================================================================================
+   use v5.10;
+   use warnings;
+   use strict 'subs';
+
+#  $debug=0 # production mode
+#  $debug=1 # warning on deletion of file (option -I in rm)
+#  $debug=2 # no deletion of files at all
+#  $debug=3 # Verification step for tarball skipped. useful in cases when this step already was successfully executed
+   $debug=0;
+   $SCRIPT_NAME='dir2tar';
+   $VERSION='1.20';
+   chomp($timestamp=`date +"%Y/%m/%d %H:%M"`);
+   $max_du_delta=0.1; # max difference between the size of the archive and du -s output
+   $archiver='pbzip2';
+   $ext='bz2';
+   $breakpoint=0;
+
+#
+# Config file
+#
+   $HOME=$ENV{'HOME'};
+   @CONFIG_LOCATIONS=("$HOME/.config/$SCRIPT_NAME.conf", "$HOME/$SCRIPT_NAME.conf","/etc/$SCRIPT_NAME.conf");
+   for( $i=0; $i<@CONFIG_LOCATIONS; $i++ ){
+     next unless( -f $CONFIG_LOCATIONS[$i] );
+     get_config($CONFIG_LOCATIONS[$i]);
+     last;
+   }
+#
+# Initialization for logme
+#
+   @ermessage_db={}; # accumulates messages for each category (warning, errors and severe errors)
+   @ercounter=(0,0,0,0);
+ #
+#  Default parameters
+#
+   $LOG_DIR="/var/opt/$SCRIPT_NAME";
+   $BASE_DIR='/home';
+   $LOG_RETENTION_PERIOD=365;
+  
+#
+# Options
+#
+   logme('V',3,3); # initialize logme so that it can be used in options
+   getopts('c:d:v:hl:b:m:a:e:',\%options);
+   if( exists($options{'l'}) ) {
+      # SYSLOG
+      $LOG_DIR=$options{'l'};
+      if( $LOG_DIR=~/^(.+)\:(\d+)/ ){
+          $LOG_DIR=$options{'l'}=$1;
+          $LOG_RETENTION_PERIOD=$2;
+      }   
+      `mkdir -p -m 770 $LOG_DIR` unless ( -d "$LOG_DIR" );      
+   }
+     
+   banner(ucfirst($SCRIPT_NAME)." -- convertor of a directory tree to tarballs with the verification and compression, Version $VERSION. Run at $timestamp",$LOG_DIR,$LOG_RETENTION_PERIOD);
+   standard_options(); 
+   logme('W',"Log directory is $LOG_DIR");
+
+
+   if(  exists  $options{'b'}  ){
+      if( -d $BASE_DIR) {
+         $BASE_DIR=$options{'b'};
+      }else{
+         abend("Parameter $ARGV[0] is not a directory");
+      }         
+   }
+   if( exists  $options{'e'}  ){
+      $ext=$options{'e'};
+      logme('W',"Extention for compressed archive to be used: ". $ext);    
+   }
+   if( exists  $options{'a'}  ){
+      $archiver=$options{'a'};
+      logme('W',"Compression program used: ". $archiver);
+   }
+   if( exists  $options{'m'}  ){
+      $max_du_delta=$options{'s'};
+      logme('W',"Allowed the difference between du -sh command and the size of the tarball in percents $max_du_delta%");
+   }
+
+   if( $debug > 0 ){
+      $safe_rm_flag='I';
+   }
+   
+   if($archiver eq '0' || $archiver eq 'false'){
+      logme('W',"No archiver will be used");
+      $archiver=$ext='';
+   }elsif( ! defined($ext) ){
+      if( $archiver =~ /^pbzip2\s/ || $archiver =~ /^bzip2\s/ ){
+      }elsif( $archiver =~ /^pigz\s/|| $archiver =~ /^gzip\s/ ){
+         $ext='tgz';
+      }elsif( $archiver =~ /^pxz\s/ || $archiver =~ /^xz\s/){    
+        $ext='xz';
+      }else{
+        abend("Extension for archiver $archiver is not known. Please specify it via option -e \n");    
+      }        
+   }
+   
+   if( scalar(@ARGV)==0 ){
+      @flist=`find $BASE -maxdepth 1 -type d`; 
+      logme('W', 'All '.scalar(@flist).' subdirectories in $BASE will be compressed');
+   }else{
+      if( -d "$BASE_DIR/$ARGV[0]" ){
+         @flist=@ARGV;
+         logme('W', 'All '.scalar(@ARGV).' subdirectories in $BASE suppled as parameters will be compressed');
+      }elsif( -f  "$BASE_DIR/$ARGV[0]" || -f $ARGV[0] ){
+         @flist=`cat $BASE_DIR/$ARGV[0]`;    
+         logme('W', 'All '.scalar(@flist).' subdirectories supplied in file list  $BASE_DIR/$ARGV[0] will be compressed');
+      } else {
+         abend("Parameter $ARGV[0] is not an existing in $BASE_DIR subdirectory, or a file with absolute path, or a file in $BASE_DIR");
+      }
+   }  
+   unless ( -d $BASE_DIR ){
+       abend("Source directory $BASE_DIR does not exists\n");
+   }
+#
+# Normalizing file list
+#
+   for ($i=0; $i<@flist; $i++) {
+      chomp($flist[$i]);
+      if( substr($flist[$i],0,2) eq './' ){
+         $flist[$i]=substr($flist[$i],2); # output from find
+      }elsif( substr($flist[$i],0,1) eq '/' && substr($flist[$i],0,length($BASE_DIR)) eq $BASE_DIR ){
+         # absolute pth needs to be converted to relative 
+         logme('W',"Directory $flist[$i] converted to relative to $BASE ".substr($flist[$i],length($BASE_DIR)+1) );
+         $flist[$i]=substr($flist[$i],length($BASE_DIR)+1);
+      }
+      if( ! -d "$BASE_DIR/$flist[$i]" ){
+         logme('W', "The entry $flist[$i] is not a subdirectory in $BASE_DIR is is ignored");
+         $flist[$i]='';
+         next;
+      }   
+   }
+   chdir($BASE_DIR); # note -- this does not change $PWD in environment for some reason so you need to $BASE_DIR when the script is launched
+   out("The base directory is $BASE_DIR");
+
+#
+# MAIN LOOP -- Processing one directory at the time
+#
+   for($fno=0; $fno<@flist; $fno++)  {
+      $start_time=time();
+      next unless($flist[$fno]);
+      chdir($BASE_DIR); # just in case
+      chomp($tardir=$flist[$fno]);
+      $manifest="$tardir.manifest";
+      $tarball="$tardir.tar";
+      $compressed_tarball="$tarball.$ext";
+      $target_dir="$BASE_DIR/$tardir";
+      $target_tarball="$target_dir/$tarball";
+      $target_manifest="$target_dir/$manifest";
+      $work_tarball="$BASE_DIR/$tarball";
+      $work_manifest="$BASE_DIR/$manifest";
+      #
+      # who owns this directory
+      #
+      (undef,undef,$owner,$group,undef)=split(/\s+/,`ls -ld $target_dir`,5);  
+      #
+      # Step 1: sanity checks
+      #
+      @dir_listing=`find $target_dir -maxdepth 1 -type d`;
+      @file_listing=`find $target_dir -maxdepth 1 -type f`;
+      if( -f "$target_manifest" &&  scalar(@dir_listing)==1 && scalar(@file_listing)<=3 ){
+         out("$tardir skipped as already processed: it contains manifest, ".$#dir_listing.' subdirectories and '.scalar(@file_listing).' files(flattened)'); # in production mode presence of manifest should block any action on the directory
+         next;
+      }
+      # we can proceed
+      chomp($timestamp=`date +"%Y/%m/%d %H:%M"`);
+      out("\n==================== Processing directory $tardir at $timestamp Owner $owner Group $group =========================\n");     
+      if ( -f "$target_manifest" ){
+         logme('W',"Orphaned $target_manifest was found in $target_dir. It is deleted");
+         run("rm $target_dir/$manifest");
+      }   
+      #
+      # Step 2:  Check if tarball with name TARGET_DIR.tar exists in the Target (move it to BASE) or BASE directory.   If not create the tarball in the BASE directory
+      #
+      if( -f $target_tarball ){
+         logme('W',"Tarball already exists in $target_dir. We will move it to $BASE_DIR and try to reuse");
+         if( -f $work_tarball ){
+             abend("ABNORMAL SITUATION: Tarball exists both in $target_dir and in $BASE_DIR directory");
+         }                  
+         $rc=run(qq(mv $target_tarball $BASE_DIR; ls -l $work_tarball));                 
+      }elsif( -f $work_tarball  && -M $work_tarball == 0 ){
+         logme('W',"Tarball already exists in $BASE_DIR. We will try to use it 'as is'...\n");
+      }else{
+         #create tarball
+         # unless the session is in screen, tar should be executed with nohup as for huge tarball accidental Ctrl-C mean another two days
+         $command=qq(tar -cf $BASE_DIR/$tarball -C $target_dir .);
+         out("\nStep 2: Please wait. Creating tarball using $command");         
+         run($command);        
+         unless (-f $work_tarball ) {
+          abend("Unable to create tarball. Space issues ? Permission issues?");
+         }
+         $tarball_size= -s $work_tarball;
+         chomp($dir_size=`du -sb $target_dir`);
+         $delta=$dir_size-$tarball_size;
+         if($delta<0){$delta=-$delta;}
+         if( $delta/$dir_size > $max_du_delta ){
+            logme('S',"ABNORMAL SITUATION: The size of generated tarball differ from the size of du output by more then $max_du_delta%. Directory skipped");
+            next;
+         }
+         if( $tarball_size < 1000000 ){
+           logme('S',"ABNORMAL SITUATION: The size of generated tarball is less then one megabyte. Directory skipped");
+           next;
+         }                 
+      }
+      #
+      # Step 3: Create manifest for the tarball
+      #  
+      chomp($timestamp=`date +"%Y/%m/%d %H:%M"`);      
+      logme('W',"Step 3: Creating manifest for ".`ls -l $tarball`." at $timestamp");
+      run("tar -tvf $work_tarball > $work_manifest;");
+      $manifest_size= -s $work_manifest;
+      if($manifest_size < 1000 ) {
+         abend("ABNORMAL SITUATION: The size of generated manifest $work_manifest is less then 1K");
+      }else{
+         logme('W',"Manifest is now created ".`ls -l $work_manifest`);
+      }   
+      #
+      # Step 4: Verify the created tarball using option -d of GNU tar. Abort if there are differences.
+      #
+      chomp($timestamp=`date +"%Y/%m/%d %H:%M"`); 
+      logme('W',"Step 4:  Verify the created tarball using option -d of GNU tar at $timestamp. Can take as long as the creation of the tarball.");
+      @result=`find $target_dir -maxdepth 1`;
+      if( scalar(@result)==1 ){
+         logme('S',"ABNORMAL SITUATION: Directory $tardir is empty. Please investigate");
+         next;
+      }elsif( scalar(@result)<=3 ){
+         logme('S',"ABNORMAL SITUATION: Directory $tardir contains three of less entries. Please investigate");  
+         next;         
+      }else{
+         logme('W',"Directory $tardir contains ".scalar(@result).' entries');
+      } 
+      
+      unless ( -f $work_tarball ){
+         abend("No file $work_tarball exists");
+      } 
+      out(`ls -lh $work_tarball`);  
+      out("Please wait while we are verifying tarball against directory tree");
+      if( $debug>=2) {
+         $output=`tar -df $work_tarball -C $target_dir . 2>&1`;
+         if( length($output) > 0 ){
+            logme('S',"There are differences between the directory tree $target_dir and the tarball $BASE_DIR/tardir.tar");
+            out($output);
+            abend("Can't continue");
+         }
+      } else {
+         out("Verification skiped due to value of the debug flag $debug");
+      }
+      out("[SUCCESS] Tarball is identical to the directory. We can proceed...\n");
+  
+      #
+      # Step 5: Delete files on local and remote servers to conserve space and I-nodes.
+      #
+      if( $debug<2 && -f $work_tarball ){
+          # Only if debug == 00 this step needs to be executed. This is the only destructive pack of the script
+          chomp($timestamp=`date +"%Y/%m/%d %H:%M"`); 
+         logme('W',"\nStep 5: Original directory will be deleted  and recreated at $timestamp ");
+         @dir_listing=`find $target_dir -maxdepth 1 -type d`;
+         @full_listing=`find $target_dir`;
+         if( scalar(@full_listing)<3 ){
+            logme('E',"The directory $target_dir contains just two files. It is probably already compressed");
+            next;
+         }   
+         $subdir_no=scalar(@dir_listing);
+         if( $subdir_no==0 ){
+             abend("ABNORMAL SITUATION: The target directory for cleaning does not contain any sub-directories but contains tarball . Please investigate");
+         } 
+         if( -f  "$target_tarball" ) {
+             abend("ABNORMAL SITUATION: Attempt to delete the resulting tarball $tarball in the directory $target_dir. Please investigate");
+         }
+         if( -f "$target_dir/$compressed_tarball" ) {
+             abend("ABNORMAL SITUATION: Attempt to delete the $compressed_tarball in the directory $target_dir. Please investigate");
+         } 
+         if( -f  "$target_manifest" ) {
+             abend("ABNORMAL SITUATION: Attempt to delete the manifest $manifest in the directory $target_dir which should now be cleaned. Please investigate");
+         }
+         if( (-s $work_tarball) < 1000000) {
+            logme('W',"ABNORMAL SITUATION: the size of the tarball $work_tarball is less then one megabyte. the directory left intact");
+            `rm $work_tarball $work_manifest`;
+            next;
+         }
+         #
+         # This is actually redundadt test. But for safety reasons let it stand.
+         #
+
+         # compare_tarball_with_du(); #  the idea that tarball is always larger the du -sb output for the directory proved to be false
+
+         out("Removing files on the local server");
+         @files_removed=`/bin/rm -rv$safe_rm_flag $target_dir`;
+         out(scalar(@files_removed)." files were_removed on the local server");
+         run("mkdir -p $target_dir");
+         if ( -d $target_dir ){
+            run("chown $owner:$group $target_dir");
+         }else{   
+            abend("Can't re-create  $target_dir after removal");
+         }
+      #
+      # Step 6: Move the tarballs and manifest back up into the target directory and compress the tarball
+      #
+        run(qq(mv $work_manifest $work_tarball $target_dir));
+        if(  -f $target_manifest && -f $target_tarball ){
+           out("[SUCCESS] Tarball and manifest were successfully moved to $target_dir");
+           run("chown $owner:$group $target_manifest");
+           run("chown $owner:$group $target_tarball");
+        } else {
+           abend("Failure index moving $manifest and $manifest  to $target_dir" );
+        }
+        if( $archiver ){ 
+          chomp($timestamp=`date +"%Y/%m/%d %H:%M"`); 
+          logme('W',"\nStep 6: compressing created tarball at $timestamp ");          
+          run("$archiver $target_tarball"); # compress the tarball 
+        }  
+        if( -f "$target_dir/$compressed_tarball" ){   
+           out("[SUCCESS] The tarboll was sucessfully compressed");    
+           run("chown $owner:$group $target_dir/$compressed_tarball; ls -l $target_dir/$compressed_tarball");           
+        }else{   
+           abend("Failure to compress the tarball $tarball" );
+        }
+         
+      }
+      $duration=sprintf('%u',(time() - $start_time)/60); # in munutes
+      if( $duration > 60 ) {
+        $minutes=$duration % 60;
+        out("Run time for conversion of $tardir is ".sprintf('%u',$duration/60)." hours and $minutes min");
+      } else {
+        out("Run time for conversion is $duration min");
+      }
+      ($debug>0) && sleep 5;
+   } # for
+#
+# Get summary
+#
+   logme('X',"SUMMARY OF ERRORS");
+   exit;
+#================================== SUBROUTINES ==================================================================
+#
+# run -- execute command and check rc
+# returns output generated by the command supplied as the first parameter
+# the second parameter depermines max allowed return code. Zero, if not specified
+sub run
+{
+  my $output;
+  ($debug>0) && out("============================\nEXECUTING: $_[0]\n");
+   return if( $debug > 2 );
+   $output=`$_[0]`;
+   $rc=$?;
+#
+# Check if $rc is in range 
+#
+  if(scalar(@_)==1 && $rc ){
+     abend("Abend on non zero return code RC $rc from command $_[0] "); 
+  }elsif( scalar(@_)==2 && $rc > $_[1] ){
+     abend("Return code  RC $rc from command $_[0]  exceed specified maximum ");
+  }
+  logme('I',"[SUCCESS] RC $main::rc");
+  if( $debug && $output ){
+     out("OUTPUT $output\n==============================");
+  }
+  return $rc;
+} #run
+#
+# softpano.pm -- Set of standard softpanorama subroutines
+#
+sub autocommit
+{
+# parameters
+my ($archive_dir,$use_git)=@_; #Script name can be with ewxprentionpl or without. 
+#
+#  Local vars
+#
+my $build_timestamp;
+my $script_delta=1;
+my $file=( ($last=index($0,'/'))>-1 ) ? substr($0,$last+1):$0;
+      ( ! -d $archive_dir ) && `mkdir -p $archive_dir`;
+      if(  -f "$archive_dir/$file"  ){
+         if( (-s $0 ) == (-s "$archive_dir/$file")   ){
+            `diff $0 $archive_dir/$file`;
+            $script_delta=( $? == 0 )? 0: 1;
+         }
+         if( $script_delta ){
+            chomp($build_timestamp=`date -r $archive_dir/$file +"%y%m%d_%H%M"`);
+            `mv $archive_dir/$file $archive_dir/$file.$build_timestamp`;
+         }
+      }
+      if(  $script_delta){
+         `cp -p $0 $archive_dir/$file`;
+          ($use_git) && `cd $archive_dir && git commit $archive_dir/$file`; # autocommit
+      }
+} # autocommit
+sub get_config
+{
+my $config_file=$_[0];
+my @conf=`cat $config_file`;
+my ($line,$i);
+   for( $i=1; $i<@conf; $i++ ){
+      chomp($line=$conf[$i]);
+      if( substr($line,0,1) eq '#' ){
+         $conf[$i]='';
+         next;
+      }
+      if( $line eq '' || $line=~/^\s*$/ ){
+         $conf[$i]=''; # emply line
+         next;
+      }
+      if( $line=~/^\s*(.*\S)\s*$/ ){
+         $line=$1;
+      }
+      if( $line=~/^(\s+)\s*=\s*['"](.*?)['"]/ ){
+         if( $2=~tr/'"// ){
+            die(qq(Wrong value $1 in line $i of config file $config_file -- string parameter can't contain ' or "" within its value.));
+         }
+         $conf[$i]='$'."$1='$2'";
+      }elsif( $line=~/^(\s+\s*=\s*\d+)/ ){
+         $conf[$i]='$'."$1";
+      }else{
+         print "Line $i ($line) in config file $config_file  is not recognizable configuration statement and was skipped\n";
+      }
+   }
+   if( $debug ){
+      print join("\n",@conf),"\n";
+   }
+   for( $i=1; $i<@conf; $i++ ){
+      next unless($conf[$i]);
+      eval($conf[$i]);
+   }
+   return 0;
+} # get_config
+sub standard_options
+{
+   helpme() if exists $options{'h'};
+   if( exists($options{'d'}) ){
+      if( $options{'d'} =~/^(\d)\:(.*)$/ ){
+         $debug=$1;
+         $breakpoint=$2;
+      }elsif( $options{'d'}=~/\d/ ){
+         $debug=$options{'d'};
+      }else{
+         die("Wrong value of option -d ($options{'d'}).Should be iether single digit of digit and test user like -d '2:frankj'\n\n");
+      }   
+   }    
+  
+   if( exists $options{'v'} ){
+      if(  $options{'v'}>=0 && $options{'v'}<=3){
+         logme('V',$options{'v'},$options{'v'});
+      }else{
+         logme('E','The value of option v (number of parallel transfers) is outside the range 0..3. 3 assumed');
+         logme('V',3,3);
+      }
+   }
+
+   if(  exists  $options{'c'}  ){
+      $config_file=$options{'c'};
+      if( -f $config_file && -r $config_file ){
+         get_config($config_file);
+      }else{
+         abend("Config file $config_file does not exists, or does not have read permissions for the user\n\n");
+      }
+   }
+}
+
+sub logme
+# logme: Standard SP package diagnostic messages generator. Version 2.8 (Nov 1, 2020)
+{
+my ($package, $filename, $lineno) = caller;
+# two special types messages 'V' -- set verbosity and 'X' print summary. 
+   if( $_[0] eq 'V' ){
+      # set verbosity NOTE: Call logme('V') simply prints the content of the buffer. Useful in processing of options for defering messages until LOR_DIR is set. 
+      $min_msglevel1=length("WEST")-$_[1]-1; # verbosity 3 is max and means cut level is 4-3-1=0  -- the index corresponding to code 'W'
+      $min_msglevel2=length("WEST")-$_[2]-1; # same for log only (like in MSGLEVEL in mainframes ;-)
+      return;
+   }elsif( $_[0] eq 'X' ){
+      my $summary=''; # string which contains stat of how many  messages of each type were generated (including supressed).       
+      for( my $i=0; $i<=length('WEST'); $i++ ){
+         next unless( $ercounter[$i] );
+         $summary.=" ".substr('WEST',$i,1).": ".$ercounter[$i];
+      } # for
+      ( scalar(@_)>1 ) && out($_[1],"\n\n=== MESSAGES SUMMARY $summary ===\n");
+      if( $ercounter[1] + $ercounter[2] ){
+         out("$ermessage_db[1]\n") if $ercounter[1]>0; # reproduce all errors
+         out("$ermessage_db[2]\n") if $ercounter[2]>0; # reproduce all severe errors 
+      }
+      return;
+   } #if
+#
+# Now let's process "normal message", which should have W,E,S, or T severity code.
+#
+my $ercode=uc(substr($_[0],0,1)); # Parameter 1 -- message code. It can be several letters long, not only a single letter
+# my $ersuffix=(length($_[0])>1) ? substr($_[0],1,1):''; # suffix of error code currently is unused. 
+chomp( my $message=$_[1]); #Parameter 2 -- text of the message (see ercode -- Parameter 1 prcessed below) 
+     $message="$SCRIPT_NAME\-$lineno$ercode: $message"; # Form diagnostic message with error code, line number and the text of the message
+my   $severity=index("WEST",$ercode);
+     if( $severity==-1){
+         out($message); # informational 'I' messages and messages with wrong error code. 
+         return;
+     }
+     $ercounter[$severity]++; # Increase messages counter for given severity (supressed by verbosity setting messages are counted too)
+     return if(  $severity<$min_msglevel1 && $severity<$min_msglevel2 ); # no need to process if this is lower then both msglevels
+#----------------- Error history -------------------------
+      if( $severity > 0 ){ $ermessage_db[$severity] .= "\n\n$message";} # this DB actually can serve as a buffer during processing of options
+#--------- Message printing and logging --------------
+      # We treat separatly verbosity for log and console.
+      # Out of four legit error codes W,E,S and T, only T is unsupressable         
+      # $min_msglevel2 defines writing to SYSLOG. 3 (default) means all (Warning, Errors and Severe errors) to be printed
+      if( $severity==2 ){
+          $message=("=" x length($message))."\n".$message."\n".("=" x length($message))."\n";
+      }    
+      ($severity >= $min_msglevel1) && print STDERR "$message\n"; # warnings and errors
+      ($severity >= $min_msglevel2) && print SYSLOG "$message\n";
+ } # logme
+
+sub out
+#direct output of lines suppled as parameters
+#Unlike logme it can accept multipile lines. Use out('') for spaceline.
+{
+   for( my $i=0; $i<@_; $i++ ){
+      print STDERR "$_[$i]\n";
+      print SYSLOG "$_[$i]\n";
+   }
+} # out
+
+sub abend
+#print diagnostic and terminate the script
+{
+my $message;
+my ($package, $filename, $lineno) = caller;
+   $message="$SCRIPT_NAME-T$lineno $_[0]. Exiting...\n\n";
+   out($message); # Syslog might not be available but STDERR always is 
+   exit 255;
+} # abend
+
+sub banner {
+#print banner and clean LOG_DIR
+my $title=$_[0]; 
+my $LOG_DIR=$_[1];
+my $LOG_RETENTION_PERIOD=$_[2];
+my $rc=( -d $LOG_DIR ) ? `find $LOG_DIR -name "*.log" -type f -mtime +$LOG_RETENTION_PERIOD -delete` : mkdir($LOG_DIR,700) ; # cleanup
+   chomp(my $timestamp=`date +"%y%m%d_%H%M"`);
+   $LOG_FILE="$LOG_DIR/$SCRIPT_NAME.$timestamp.log";
+   open(SYSLOG,'>',$LOG_FILE) || die("Fatal error: unable to open $LOG_FILE");
+   chomp($timestamp=`date "+%y/%m/%d %H:%M"`);   
+   chomp( my $BUILD_DATE=`date -r $0 +"%y%m%d_%H%M"`);
+   $title.="( Build $BUILD_DATE ). Date: $timestamp";
+   out('',$title,"Logs are at $LOG_FILE. Type -h for help.",('=' x length($title)),'');
+}
+
+sub mkdirs
+# sub mkdirs: create multiple directories using option -p
+{
+   foreach( @_ ){
+      next if(  -d $_);
+      system("mkdir -p $_");
+      abend("Can't create directory $_") unless ( -d $_ );
+   }
+}
+sub helpme
+{
+   open(SYSHELP,'<',$0);
+   while($line=<SYSHELP>) {
+      if( substr($line,0,3) eq "#::" ) {
+         print substr($line,3);
+      }
+   } # for
+   close SYSHELP;
+   while(<DATA>){
+      print " $_";
+   } # while
+   exit 0;
+}
+sub getopts
+{
+my ($options_def,$options_hash)=@_;
+my ($first,$rest,$pos,$cur_opt);
+   while(@ARGV){
+      $cur_opt=$ARGV[0];
+      last if( substr($cur_opt,0,1) ne '-' );
+      if(  $cur_opt eq '--'){
+          shift @ARGV;
+          last;
+      }
+      $first=substr($cur_opt,1,1);
+      $pos = index($options_def,$first);
+      if( $pos==-1){
+         warn("Undefined option -$first skipped without processing\n");
+         shift(@ARGV);
+         next;
+      }
+      $rest=substr($cur_opt,2);
+      if( $pos<length($options_def)-1 && substr($options_def,$pos+1,1) eq ':' ){
+         # option with parameters
+         if( $rest eq ''){
+           shift(@ARGV); # get the value of option
+           unless( @ARGV ){
+              warn("End of line reached for option -$first which requires argument\n");
+              $$options_hash{$first}='';
+              last;
+           }
+           if(   $ARGV[0] =~/^-/ ){
+               warn("Option -$first requires argument\n");
+               $$options_hash{$first} = '';
+           }else{
+               $$options_hash{$first}=$ARGV[0];
+               shift(@ARGV); # get next chunk
+           }
+         }else{
+            #value is concatenated with option like -ddd
+            if( ($first x length($rest)) eq $rest ){
+               $$options_hash{$first} = length($rest)+1;
+            }else{
+               $$options_hash{$first}=$rest;
+            }
+            shift(@ARGV);
+         }
+      }else {
+         $$options_hash{$first} = 1; # set the option
+         if(  $rest eq ''){
+            shift(@ARGV);
+         }else{
+            $ARGV[0] = "-$rest"; # there can be other options without arguments after the first
+         }
+      }
+   }
+}
+__DATA__
