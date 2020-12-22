@@ -217,6 +217,7 @@
       $target_manifest="$target_dir/$manifest";
       $work_tarball="$BASE_DIR/$tarball";
       $work_manifest="$BASE_DIR/$manifest";
+      $fresh_tarball=0;
       #
       # who owns this directory
       #
@@ -253,12 +254,16 @@
          # unless the session is in screen, tar should be executed with nohup as for huge tarball accidental Ctrl-C mean another two days
          $command=qq(tar -cf $BASE_DIR/$tarball -C $target_dir .);
          out("\nStep 2: Please wait. Creating tarball using $command");         
-         run($command);        
+         run($command);  
+         $fresh_tarball=1;         
          unless (-f $work_tarball ) {
           abend("Unable to create tarball. Space issues ? Permission issues?");
          }
          $tarball_size= -s $work_tarball;
          chomp($dir_size=`du -sb $target_dir`);
+         if( $dir_size =~/^(\d+)/ ){
+            $dir_size=$1;
+         }   
          $delta=$dir_size-$tarball_size;
          if($delta<0){$delta=-$delta;}
          if( $delta/$dir_size > $max_du_delta ){
@@ -302,23 +307,26 @@
          abend("No file $work_tarball exists");
       } 
       out(`ls -lh $work_tarball`);  
-      out("Please wait while we are verifying tarball against directory tree");
-      if( $debug>=2) {
+      
+      if( $debug <= 2 || $fresh_tarball==0 ){
+         out("Please wait while we are verifying tarball against directory tree");
          $output=`tar -df $work_tarball -C $target_dir . 2>&1`;
          if( length($output) > 0 ){
             logme('S',"There are differences between the directory tree $target_dir and the tarball $BASE_DIR/tardir.tar");
             out($output);
             abend("Can't continue");
          }
-      } else {
-         out("Verification skiped due to value of the debug flag $debug");
+      }elsif($fresh_tarball
+         out("Verification skiped beasue the tarball was just created with rezo return code and manifest was produced without errors");
+      }else{   
+         out("Verification skiped due to the value of the debug flag: debug=$debug");
       }
       out("[SUCCESS] Tarball is identical to the directory. We can proceed...\n");
   
       #
       # Step 5: Delete files on local and remote servers to conserve space and I-nodes.
       #
-      if( $debug<2 && -f $work_tarball ){
+      if( $debug < 2 && -f $work_tarball ){
           # Only if debug == 00 this step needs to be executed. This is the only destructive pack of the script
           chomp($timestamp=`date +"%Y/%m/%d %H:%M"`); 
          logme('W',"\nStep 5: Original directory will be deleted  and recreated at $timestamp ");
