@@ -43,55 +43,61 @@
 #
 # 1.0 bezroun 2020/12/21  Initial implementation
 # 1.1 bezroun 2020/12/21  Added options -b -r -p and -v 
-# 1.2 bezroun 2020/12/28  Simple backup of critical file added and option -b to speiocfy path 
-# 1.3 bezroun 2020/12/29  Added primitive CMS capabilities for GIT
-# 1.4 bezroun 2020/12/29  Conversion script to use is now a parameter, for example centos2ol_plus.sh 
+# 1.2 bezroun 2020/12/28  Simple backup of critical files added 
+# 1.3 bezroun 2020/12/29  Added primitive autosave capabilities (useful for GIT or othe rconfig management system)
+# 1.4 bezroun 2020/12/30  Ability to use a modified conversion script (with name provided as a parameter) added, for example centos2ol_plus.sh 
+# 1.5 bezroun 2021/01/04  sosreport added to the recovery information. 
+# 1.6 bezroun 2021/01/04  Check for free space in /boot and /var added.  Backup expanded. 
 # --------------------------------------------------------------------------------------------------
 
    debug=0
    set -u 
    SCRIPT_NAME=centos2ol_wrapper
-   VERSION='1.4'
-   
+   VERSION='1.6'
+   HOST=`hostname -s` # global var -- short host name. 
+   STEPNO=0
+
 #
 # Configuration parameters -- should be adapted for the particular installation.  
 #   
-   BASE=/var/Centos2ol_recovery       # Basic recovery data for the server (/etc, /boot and selected part of /root and /var ) 
-   CENTOS2OL='/root/bin/centos2ol.sh' # the name of the scipt to execute convertion to Oracle Linux (can be modified one) 
-   password='centos2p'                # default root password to reset if option -r is specified with less than 6 characters. 
-   set_proxy=0                        # should we set proxy by default ? 
+   BASE=/var/Centos2ol_recovery          # Basic recovery data for the server (/etc, /boot and selected part of /root and /var ) 
+   CENTOS2OL='/root/bin/centos2ol.sh'    # the name of the scipt to execute convertion to Oracle Linux (can be modified one) 
+   password='centos2p'                   # default root password to reset if option -r is specified with less than 6 characters. 
+   set_proxy=0                           # should we set proxy by default ? 
    PROXY='www-proxy.basf-corp.com:8081'  # default proxy to be used
 
 function save_source
 {   
+   [[ ! -d $HOME/Archive ]] && mkdir  $HOME/Archive   
    if (( debug )); then
       script_delta=1
       if [[ -f "$HOME/Archive/$SCRIPT_NAME" ]] ; then
-         size1=`stat --format=%s "$HOME/$SCRIPT_NAME"`
+         size1=`stat --format=%s $0`
          size2=`stat --format=%s "$HOME/Archive/$SCRIPT_NAME"`
          if (( $size1 == $size2 )) ; then
-            diff $HOME/$SCRIPT_NAME $HOME/Archive/$SCRIPT_NAME
+            diff $0 $HOME/Archive/$SCRIPT_NAME
             if (( $? == 0 )) ; then
                script_delta=0;
             fi
          fi
          if (( $script_delta > 0 )) ; then
             SCRIPT_TIMESTAMP=`date -r $HOME/Archive/$SCRIPT_NAME +"%y%m%d_%H%M"`
-            mv $HOME/Archive/$SCRIPT_NAME $HOME/Archive/$script.$SCRIPT_TIMESTAMP.sh
-            cp -p $HOME/$SCRIPT_NAME $HOME/Archive/$SCRIPT_NAME
+            mv $HOME/Archive/$SCRIPT_NAME $HOME/Archive/$SCRIPT_NAME.$SCRIPT_TIMESTAMP.sh
+            cp -p $0 $HOME/Archive/$SCRIPT_NAME
          fi
       else
-         cp -p $HOME/$SCRIPT_NAME $HOME/Archive/$SCRIPT_NAME
+         cp -p $0 $HOME/Archive/$SCRIPT_NAME
       fi
    fi
 }
 
 function step_info
 {
+let STEPNO+=1
    echo
    echo
    echo "============================================================================"
-   echo "*** LINE $1, STEP: $2"
+   echo "*** Step $STEPNO at line $1: $2"
    echo "============================================================================"
    sleep 3
 }
@@ -101,7 +107,7 @@ function info
    echo 
    echo "INFO-$1: $2"
    echo
-   sleep 3    
+   sleep 1   
 }
 
 function abend
@@ -114,7 +120,27 @@ function abend
    if (( $1 < 255 )); then exit $1;  fi 
    exit 255          
 }
-
+function sos
+{
+   sosreport=`which sosreport`   
+   if (( $? > 0 )); then 
+      info $LINENO "Looks like sosreport is not installed. We will attempt to install it"
+      yum -y install sosreport
+   fi   
+   sosreport --batch --name $HOST --tmp-dir $BASE
+   ls -lh $BASE/sosreport*xz
+   sos_count=`ls $BASE/sosreport*xz | wc -l`
+   if (( sos_count < $1 )); then            
+      info $LINENO "Warning: sosreport is not found in $BASE" 
+   fi      
+}
+function is_existing_file
+{
+  if [[ ! -f $2 ]]; then 
+     abend $1 "File $2 does not exist. Can't continue..."
+  fi   
+      
+} 
 #
 # Banner
 #
@@ -182,19 +208,28 @@ function abend
    
    if (( $# == 1 )) ; then
       CENTOS2OL=$1
-      info "Script $1 will be used for conversion"
+      info $LINENO "Script $1 will be used for conversion"
    elif (( $# > 1 )) ; then
       abend "Wrong number of arguments -- it should either only one -- the fully qualified (with path) name for the conversion script"
    fi
+   
+   is_existing_file $LINENO $CENTOS2OL
+#
+#  set log file for the conversion script
+#
 
+   timestamp=`date +"%y%m%d_%H%M"`
+   LOG="$BASE/centos2ol.$HOST.$timestamp.log"
 #
 # Processing started 
 #
-   step_info $LINENO "checking for effective uid"
+   step_info $LINENO "Checking for effective uid"
    effective_uid=`id -u`
    if (( effective_uid > 0 )); then 
        abend $LINENO "You need to run the script as root..."
-   fi     
+   else
+       info $LINENO "[OK] We are running as root" 
+   fi       
 
 #
 # Was script centos2os.sh already run?
@@ -206,17 +241,17 @@ function abend
       ls -l /etc/yum.repos.d
       abend $LINENO "Script centos2os.sh was not designed to run twice of the same server. It can destory it if run twice..."
    fi 
-#
-# Prepering yum for convertions
-#
-   step_info $LINENO "Cleaning yum"
-   yum clean all
-   rpm -qa > $BASE/list_of_installed_rpms
+
    
 #
 # Creating backup directory
 #
-   step_info $LINENO "Making backup of vital data"
+   step_info $LINENO "Making backup of vital data to the directory BASE"
+   if [[ $BASE == '/var/Centos2ol_recovery' ]]; then 
+      echo "The default location of backup (/var) is used. In case the server becomes unbootable after the conversion fails that might be a problem"
+      echo "Cancel in seven seconds if you want to change the location of the backup directory"
+      sleep 7
+   fi   
    if [[ ! -d $BASE ]]; then
       mkdir $BASE;
       if [[ -d $BASE ]]; then
@@ -225,23 +260,56 @@ function abend
          abend $LINENO "Unable to create the directory $BASE. Are you running the script as Root?"
       fi 
 #
-# Parcial back in case of troubles you can benefit from a full backup of /etc and /boot and parcial of /var 
+# Partial backup. In case of troubles you can benefit from a full backup of /etc and /boot and selected dirs of /var 
 #  
-      step_info $LINENO "Creating backup of /etc"
+      echo "============================================================Creating backup of /etc"
       tar cf $BASE/etc_before_conversion.tar -C /etc . 
-      step_info $LINENO  "Creating backup of /boot"      
+      is_existing_file $LINENO "$BASE/etc_before_conversion.tar"
+      echo "============================================================ Creating backup of /boot"      
       tar cvzf $BASE/boot_before_conversion.tgz -C /boot .
+      is_existing_file $LINENO "$BASE/boot_before_conversion.tgz"
       sleep 3
-      step_info $LINENO  "Creating backip of /root"
-      tar cf $BASE/root_dot_files.tar -C /root anaconda-ks.cfg .bash_profile .bashrc .bash_history
-      tar cf $BASE/selected_var_cron.tar -C /var/spool/cron .
+      echo "============================================================ Creating selective backup of /root"
+      list=''
+      for f in '/root/anaconda-ks.cfg' '/root/bin' 'root/.config'; do 
+         if [[ -e f ]]; then 
+            list="$list $f"
+         fi
+      done   
+      tar cf $BASE/root_dot_files.tar -C /root $list .bash*
+      is_existing_file $LINENO "$BASE/root_dot_files.tar"
+      echo "============================================================ Creating selective backup of /var/cron"
+      tar cf $BASE/var_cron.tar -C /var/spool/cron .
+      is_existing_file $LINENO "$BASE/root_dot_files.tar"
+      echo "============================================================ Creating selective backip of /var/log"
+      is_existing_file $LINENO "$BASE/root_dot_files.tar"
       tar czf $BASE/var_messages.tgz -C /var/log .     
-      echo "[OK] The parcial backup done"
       cd
+      echo "============================================================ Creating sosreport"
+      sos 1
+      echo "============================================================ Creating df, netstat ifconfig and fdisk maps"
+      df -h > $BASE/df.map
+      netstat -rn >  $BASE/netstat.map
+      ifconfig -a > $BASE/ifconfig.map 
+      mount > $BASE/mount.map 
+      fdisk -l > $BASE/fdisk.map
+      dmidecode -t system > $BASE/server_serial.map
+      cp /var/log/{dmesg,boot.log,yum.log} $BASE
+      chmod 700 $BASE/*
+      echo "[OK] The partial backup completed. Files are in the directory $BASE." 
+      echo "They should be stored on a shared filesytem like NFS or GPFS or USB drive so that they remain accessible in case the system became unbootable"
+      echo "Cancel in seven seconds if you want to change the location of the backup directory"
+      sleep 7
    else
-      info $LINENO "ATTENTION: it looks like this script was already lauched at least once: directory $BASE is present of the server"
+      info $LINENO "ATTENTION: $BASE directory is present which means that this script was already launched at least once: Backup skipped"
    fi      
-
+#
+# Preparing yum for convertions
+#
+   step_info $LINENO "Cleaning yum"
+   yum clean all
+   rpm -qa > $BASE/list_of_installed_rpms
+   cp -r /etc/yum.repos.d $BASE
 #
 # Checking for extra repositories 
 #
@@ -270,12 +338,14 @@ function abend
       fi
    fi
 
-#If /boot is  mount points,  check for free space. On some appliances /boot is 200M or 500 M and may contain several updated kernels
-# so there is no space for the new one
+#
+#If /boot is a mount points,  check for free space. On some appliances and even servers /boot is only 200M or 500M and may contain several updated kernels
+#   so there is not enough space for the new one
+#
 
    is_mounted=`mount | fgrep ' /boot type ' | wc -l`
    if (( is_mounted > 0 )); then 
-      step_info $LINENO "Checking for 100MB of free space in /boot"
+      step_info $LINENO "Checking for at least 100MB of free space in /boot filesystem"
       free_space=`df -m  /boot | tail -1 | tr -s ' ' | cut -d ' ' -f 4`
       if (( free_space < 100 )); then 
          info $LINENO "/boot partition has less then 100MB of free space" 
@@ -285,7 +355,30 @@ function abend
          info $LINENO "[OK] The /boot partition has $free_space megabytes of free space"
       fi   
    fi
-
+   
+   is_mounted=`mount | fgrep ' /var type ' | wc -l`
+   if (( is_mounted > 0 )); then 
+      step_info $LINENO "Checking for at least 10GB of free space in /var filesystem"
+      free_space=`df -m  /var | tail -1 | tr -s ' ' | cut -d ' ' -f 4`
+      if (( free_space < 10000 )); then 
+         info $LINENO "/var partition has less then 10GB of free space" 
+         df -h /boot
+         abend $LINENO "Please free space in /var manually"
+      else
+         info $LINENO "[OK] The /var partition has $free_space GB of free space"
+      fi   
+   else
+      step_info $LINENO "Checking for 10GB of free space in root filesystem"
+      free_space=`df -m  / | tail -1 | tr -s ' ' | cut -d ' ' -f 4`
+      if (( free_space < 10000 )); then 
+         info $LINENO "/var partition has less then 10GB of free space" 
+         df -h /boot
+         abend $LINENO "Please free space in / manually"
+      else
+         info $LINENO "[OK] The / partition has $free_space MB of free space"
+      fi 
+   fi 
+      
    if [[ -d $HOME/.proxy ]]; then 
       step_info $LINENO "Exporting http_proxy and https_proxy from $HOME/.proxy"
       . $HOME/.proxy 
@@ -295,12 +388,20 @@ function abend
    if (( set_proxy )); then 
       export http_proxy="$PROXY"
       export https_proxy="$PROXY"
+      env | fgrep proxy
    elif [[ -d $HOME/.proxy ]]; then 
       . $HOME/.proxy 
       env | fgrep proxy
    fi    
    
    if (( debug == 0 )); then 
-     step_info $LINENO "Staring CENTOS2OL script. Log is at /root/centos2ol.`hostname -s`.log"
-     bash -x $CENTOS2OL  | tee /root/centos2ol.`hostname -s`.log
-   fi          
+     step_info $LINENO "Starting CENTOS2OL script. Log is at $LOG"
+     bash -x $CENTOS2OL 2>&1 | tee $LOG 
+     sos 2 # create sosreport after the conversion. 
+   else
+     echo "If all checks are OK you can continue using the command:"
+     echo  "bash -x $CENTOS2OL 2>&1 | tee $LOG"
+   fi 
+   
+   exit 0;
+   
