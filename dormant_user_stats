@@ -73,6 +73,7 @@
 #                             and parameters defined with value to be specified without any value ( -v means -v 1 ) 
 # 1.80  2020/10/25  BEZROUN   Added sorting order to the title of the table 
 # 2.00  2020/11/02  BEZROUN   Added option -x -- execute arbitraty command for each dormant user(lock or delete account) 
+# 2.10  2020/05/02  BEZROUN   Backup list now contain timestamp so for a given day it is retrivbed only once 
 #= START ========================================================================================================================
 use v5.0.1;
 use feature qw(say state);
@@ -82,7 +83,7 @@ use strict 'subs';
                   # unless this is the last option. That's a shame. Also allows repretition of letters instead of numberic value
                   # -vvv is equvament to -v 3 
 
-   $VERSION='2.00';
+   $VERSION='2.10';
    $SCRIPT_NAME='dormant_users_stats';
    $debug=0;
    $DB::single = 0;
@@ -102,9 +103,8 @@ use strict 'subs';
    $top_severity=0;
    @ercounter=(0,0,0,0);
    $LOG_RETENTION_PERIOD=365;
-      unless ($WORKDIR) {
-      $WORKDIR='/tmp/'.ucfirst($SCRIPT_NAME);
-   }
+   $WORKDIR='/tmp/'.ucfirst($SCRIPT_NAME);
+
 #
 # Current time
 #
@@ -117,7 +117,6 @@ use strict 'subs';
 #
    %scale=('T'=>1_000_000_000_000,'G'=>1_000_000_000,'M'=>1_000_000,'K'=>1_000,'1'=>1);
    %mon2mm=('jan'=>1,'feb'=>2,'mar'=>3,'apr'=>4,'may'=>5,'jun'=>6,'jul'=>7,'aug'=>8,'sep'=>9,'oct'=>10,'nov'=>11,'dec'=>12);
-
 
 #
 # Let't determine the default BASE directory in which we need to scan home directories 
@@ -138,7 +137,7 @@ use strict 'subs';
 #
 
    getopts("hd:v:i:b:m:l:s:x:",\%options);
-   helpme() if exists($options{'h'};
+   helpme() if exists($options{'h'});
    if ( exists($options{'l'}) ) {
       # SYSLOG
       $WORKDIR=$options{'l'};
@@ -152,7 +151,7 @@ use strict 'subs';
       if ($options{'d'} =~/^(\d)\:(.*)$/ ) {
          $debug=$1;
          $test_user=$2;
-      } elsif($options{'d')=~/\d/){
+      } elsif( $options{'d'}=~/\d/ ){
          $debug=$options{'d'};
       }else{
          die("Wrong value of option -d ($options{'d'}).Should be iether single digit of digit and test user like -d '2:frankj'\n\n");
@@ -160,7 +159,7 @@ use strict 'subs';
    }
    if ( exists($options{'v'}) ) {
       $verbosity=$options{'v'};
-      if (length($options{'v'})=2) {
+      if (length($options{'v'})==2) {
          $verbosity=substr($options{'v'},0,1);
          if(length($options{'v'})==2 && substr($options{'v'},1,1) eq '0' ){
            $msglevel2=0; #permament block of writing to log
@@ -212,9 +211,8 @@ use strict 'subs';
    }
    push(@messages_buffer,"For list of options run: $SCRIPT_NAME -h . Log will be written to directory $WORKDIR");
 #
-#  Create DATA_DIR directory
+#  Create WORKDIR directory
 #
-
    unless( -d $WORKDIR) {
       mkdir_path($WORKDIR);
    }
@@ -233,16 +231,13 @@ use strict 'subs';
      abend("$BASE is not a directory");
    }
    chdir($BASE);
-
-   $backup_list="$WORKDIR/raw_dormant_users_stats.lst";
-   if( $debug && -f $backup_list ){
+   chomp($timestamp=`date +"%y%m%d"`);
+   $backup_list="$WORKDIR/raw_dormant_users_stats.$timestamp.lst";
+   if( -f $backup_list ){
       @raw_stats=`cat $backup_list`;
    }else{
-       if($debug){
-          @raw_stats=`find .  -maxdepth 1 -type d -mtime +$INACTIVITY_PERIOD | tee $backup_list`;
-       }else{
-          @raw_stats=`find .  -maxdepth 1 -type d -mtime +$INACTIVITY_PERIOD | tee $backup_list`;
-       }
+      @raw_stats=`find .  -maxdepth 1 -type d -mtime +$INACTIVITY_PERIOD | tee $backup_list`;
+      ($debug) && logme('W',"Raw state retrived");
    }
 
    chomp($total_users=`find .  -maxdepth 1 -type d  | wc -l`);
@@ -377,14 +372,14 @@ use strict 'subs';
 # generate command for each doemant user
 #
    if( $COMMAND ){
-      logme('W',"List of dormat users written to $WORKDIR/dormant_user.lst");
-      open(SYSOUT,'>',"$WORKDIR/dormant_user.lst") || abend(can wrting file dormant_user.lst to workdir);
+      logme('W',"List of dormant users written to $WORKDIR/dormant_user.lst");
+      open(SYSOUT,'>',"$WORKDIR/dormant_user.lst") || abend("Can't write file dormant_user.lst to $WORKDIR");
       for( my $i=0; $i<@uid; $i++ ){
          say SYSOUT $uid[$i];
       } 
       close SYSOUT;
       logme('W',"List of specified operation $COMMAND on each of dormat users written to $WORKDIR/dormant_user_action.sh");
-      open(SYSOUT,'>',"$WORKDIR/dormant_user_action.sh") || abend(can wrting file dormant_user_action.sh to workdir);
+      open(SYSOUT,'>',"$WORKDIR/dormant_user_action.sh") || abend("Can't write file dormant_user_action.sh to $WORKDIR");
       for( my $i=0; $i<@uid; $i++ ){
          $name=$uid[$i];
          out("$COMMAND $name\n");
@@ -395,6 +390,7 @@ use strict 'subs';
    }   
 
 exit (0);
+
 sub convert2human
 # 1 value
 # 2 multiplier
