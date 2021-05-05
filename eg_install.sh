@@ -6,7 +6,7 @@
 #:     eg_install.sh  
 #
 # ====================================================================================
-# 1.0 bezroun 2021/05/03  Initial implementation
+# 1.0 bezroun 2021/05/02  Initial implementation
 # 1.1 bezroun 2021/05/04  Diagnistics improved. Logging of steps added
 #======================================================================================
 VERSION='1.1'
