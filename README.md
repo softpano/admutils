@@ -3,7 +3,7 @@
 
 This project is about publishing of a set of written by me over the years sysadmin utilities (this plan subject to change without notice).
 
-**NOTE**: This page is not maintained often, as I prefer HTML to Markup. See html version of this page at http://softpanorama.org/Admin/Sp_admin_utils/index.shtml for more recent and complete information.
+**NOTE**: This page is not maintained often, as I prefer HTML to Markdown. See html version of this page at http://softpanorama.org/Admin/Sp_admin_utils/index.shtml for more recent and complete information.
 
 ## History
 <p><b>[May 05, 2021] <a href="../../../Dotfiles/Eg_install/eg_install.shtml">eg_install.sh Installation script for eg which allow to 
