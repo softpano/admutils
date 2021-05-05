@@ -24,13 +24,13 @@ incorporating own examples from <tt>.bash history</tt>.</p>
 
    <p>The script <tt>eg</tt> uses two directories for storing the examples files (one for each utility; each written in the 
 subset of Markdown)</p>
-   <ol>
+<ol>
 
-      <li><b>custom</b> directory -- the directory in which you can edit files using option <tt>-e</tt> (for example <tt>eg -e find</tt>) 
-      </li>
+<li><b>custom</b> directory -- the directory in which you can edit files using option <tt>-e</tt> (for example <tt>eg -e find</tt>) 
+</li>
 
-      <li><b>default</b> directory -- the directory for the small set of examples which comes with the script. </li>
-   </ol>
+<li><b>default</b> directory -- the directory for the small set of examples which comes with the script. </li>
+</ol>
 
    <p>If pages for the particular tool/utility are present in both, <tt>eg</tt> merges them creating composite page. So it 
 is possible for example to store your own example in custom directory, and tldr in default directory but I prefer to 
