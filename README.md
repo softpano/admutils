@@ -6,7 +6,8 @@ This project is about publishing of a set of written by me over the years sysadm
 **NOTE**: This page is not maintained often, as I prefer HTML to Markup. See html version of this page at http://softpanorama.org/Admin/Sp_admin_utils/index.shtml for more recent and complete information.
 
 ## History
-
+<p><b>[May 05, 2021] <a href="../../../Dotfiles/Eg_install/eg_install.shtml">eg_install.sh Installation script for eg which allow to 
+reuse tldr pages and edit them creating private knowledgebase with examples of major Linux utilities</a></b></p>
 <p>It is impossible to remember details of Linux utilities: there are too many of them and some are quite complex (<tt>find</tt>,
    <tt>xargs</tt>, <tt>grep</tt>, <tt>systemctl</tt>, etc). To compensate for the low quality on Linux man pages (which 
 typically lack meaningful examples) you can use community database (for example<a rel="noreferrer noopener" target="_blank" title="https://github.com/tldr-pages/tldr" tabindex="-1" href="https://github.com/tldr-pages/tldr"> 
