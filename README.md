@@ -1,7 +1,7 @@
 # Softpanorama collection of potentially useful sysadmin utilities
 
 
-This project is about publishing of a set of written by me over the years sysadmin utilities (this plan subject to change without notice).
+This project is about publishing of a set of sysadmin utilities written by me over the years
 
 **NOTE**: This page is not maintained often, as I prefer HTML to Markdown. See html version of this page at http://softpanorama.org/Admin/Sp_admin_utils/index.shtml for more recent and complete information.
 
