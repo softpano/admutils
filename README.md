@@ -7,6 +7,46 @@ This project is about publishing of a set of written by me over the years sysadm
 
 ## History
 
+<p>It is impossible to remember details of Linux utilities: there are too many of them and some are quite complex (<tt>find</tt>,
+   <tt>xargs</tt>, <tt>grep</tt>, <tt>systemctl</tt>, etc). To compensate for the low quality on Linux man pages (which 
+typically lack meaningful examples) you can use community database (for example<a rel="noreferrer noopener" target="_blank" title="https://github.com/tldr-pages/tldr" tabindex="-1" href="https://github.com/tldr-pages/tldr"> 
+tldr database</a> available from GitHub; it can be viewed using Web browser from
+   <a rel="noreferrer noopener" target="_blank" title="https://tldr.ostera.io/find" tabindex="-1" href="https://tldr.ostera.io/find">ostera.io</a>) or to create a private database of examples, partially or fully extracted from 
+   <tt>.bash_history</tt>. 
+The latter allows to adapt examples to your needs and as such is closer to the idea of a knowledgebase, although one 
+does not exclude another.</p>
+
+   <p>I experimented with adaptation for this purpose of
+   <a rel="noreferrer noopener" target="_blank" title="https://github.com/srsudar/eg" tabindex="-1" href="https://github.com/srsudar/eg">Python script eg</a>, available from GitHub and got encouraging results. The idea is to supplement the default set of 
+pages with examples provided with <tt>eg</tt> with pages from <tt>tldr</tt> and gradually enhance and edit them by 
+incorporating own examples from <tt>.bash history</tt>.</p>
+
+   <p>The script <tt>eg</tt> uses two directories for storing the examples files (one for each utility; each written in the 
+subset of Markdown)</p>
+   <ol>
+
+      <li><b>custom</b> directory -- the directory in which you can edit files using option <tt>-e</tt> (for example <tt>eg -e find</tt>) 
+      </li>
+
+      <li><b>default</b> directory -- the directory for the small set of examples which comes with the script. </li>
+   </ol>
+
+   <p>If pages for the particular tool/utility are present in both, <tt>eg</tt> merges them creating composite page. So it 
+is possible for example to store your own example in custom directory, and tldr in default directory but I prefer to 
+edit tldr pages directly.</p>
+
+   <p>To create a private knowledgebase of examples that uses the suggested above format with set of tldr pages as the 
+initial content of the knowledgebase, you need first to download two zip files from GitHub <tt>eg-master.zip</tt> and
+<tt>tldr-main.zip</tt> to your home directory. That allows to avoid pains with proxy.</p>
+
+   <p>After that run the following installation script. Alias <tt>eg</tt> needs to be added to your <tt>.bash_profile</tt> 
+or to <tt>.bashrc</tt>, depending on how your dot files are organized. The script adds it <tt>.bash_profile</tt> which 
+might be incorrect.</p>
+
+   <p>See <a href="../Sp_admin_utils/eg_install.shtml">Admin/Sp_admin_utils/eg_install.shtml</a> and <a href="../Tips/helpers.shtml">Linux command 
+   line helpers</a> for more details </p>
+
+
 **Dec 28, 2020** *centos2ol_wrapper* Wrapper with sanity checks for centos2ol.sh CentOs to Oracle Linux convertion script. It incorporates several "no nonsense" checks that make success of the conversion more probable. I experienced around 30% failure rate iin my tests and 10% (or one server out of ten failed to report after the conversion was finished). Serious troubles include but not limited to  deletion of hundreds of vital RPMs ( due to my mistake made out  of frustration; nit stll no protection from this kind  of errors), if safety measures are ignored. So failures due to the lack of pre-conversions checks is not a hypothetic scenario, especially failure on the state of rolling our Oracle RPMs, when the system in "transitional state" and can't be safely rebooted. It is an important safety measure if you convert multiple CentOS or RHEL servers to Oracle Linux and need to convert  important production servers. Man page at centos2ol_wrapper. 
 
 See http://www.softpanorama.org/Commercial_linuxes/Oracle_linux/conversion_of_centos_to_oracle_linux.shtml for details
