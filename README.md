@@ -1,7 +1,28 @@
 # Softpanorama collection of potentially useful sysadmin utilities
 
 
-This project is about publishing of a set of sysadmin utilities written by me over the years
+<p>This project is about publishing of a set of sysadmin utilities that help to administer Unix server in a "classic" way. They were written by me over the years and of 
+varying quality and usefulness. You can view them as a kind of my personal protest against the overcomplexity of the current sysadmin environment. Now there are many tools available to make simple tasks complex and complex unsolvable. Generally system administration 
+formally moves to the "Windows-way" of doing things -- providing GUI and "blackboxing" internals. Many DevOps toys can be viewed as steps in this 
+particular direction. Some new subsystems like systemd also belong to this category. They all have their place but they all add too much complexity and in small companies adoption of them entails significant risks. 
+   
+<p>In this sense you can view this collection as a very small contribution to the&nbsp; "back to basics" movement among sysadmins.</p> 
+
+<p>Moreover, for small and medium organization adoption of overly complex tools entrain significant risks. If the organization adopted a set of complex tools and a person who known those tool leaves, often the situation 
+deteriorates pretty quickly as there is no cost effective way to replace him/her. Lack of documentation is typical and can bite very hard to the level of 
+partial or complete paralysis.  
+
+<p>Sticking to classic Unix capabilities often is a better approach to system administration then the adoption of a bunch of complex 
+shiny tools that no normal person can learn in depth in his life.  Drawbacks often cited for "primitive" approaches of managing servers (for example with cloning /etc/passwd /etc/group files using ssh instead of Active directory or some other directory)  can often be 
+compensated quite easity (for example with the automatic synchronization of passwd files on demand via ssh form some "etalon" server, see below ; it is also possible decompile and generate useradd command using diff of two passwd/group files).&nbsp; 
+Similarly a lot of collection of data for monitoring can be done using NFS3 and does not require SSH or some proprietary protocol. 
+And analysis of logs is better performed by&nbsp; custom utilities tuned to your particular situation or at least enhanced third 
+party scripts, instead of some complex system. Same is true for backup although here&nbsp; your mileage may vary. Often &quot;bare metal&quot; 
+backup can be done via tar or Rsync and does not require complex tools with additional (and probably less secure then ssh) 
+protocols. </p>
+
+<p>At the same time classic Unix provides unmatched flexibility which some modern approaches considerably diminish squeezing sysadmin is 
+<a href="https://en.wikipedia.org/wiki/Procrustes">Procrustes bed</a> of badly designed and overly&nbsp; complex solutions.</p>
 
 **NOTE**: This page is not maintained often, as I prefer HTML to Markdown. See html version of this page at http://softpanorama.org/Admin/Sp_admin_utils/index.shtml for more recent and complete information.
 
