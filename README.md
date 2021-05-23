@@ -21,7 +21,7 @@ party scripts, instead of some complex system. Same is true for backup although 
 backup can be done via tar or Rsync and does not require complex tools with additional (and probably less secure then ssh) 
 protocols. </p>
 
-<p>At the same time classic Unix provides unmatched flexibility which some modern approaches considerably diminish squeezing sysadmin is 
+<p>At the same time classic Unix provides unmatched flexibility which some modern approaches considerably diminish squeezing sysadmin into 
 <a href="https://en.wikipedia.org/wiki/Procrustes">Procrustes bed</a> of badly designed and overly&nbsp; complex solutions.</p>
 
 **NOTE**: This page is not maintained often, as I prefer HTML to Markdown. See html version of this page at http://softpanorama.org/Admin/Sp_admin_utils/index.shtml for more recent and complete information.
