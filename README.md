@@ -1,4 +1,4 @@
-# Softpanorama collection of potentially useful sysadmin utilities
+# "Back to basics" -- Softpanorama collection of potentially useful simple sysadmin utilities
 
 
 <p>This project is about publishing of a set of sysadmin utilities that help to administer Unix server in a "classic" way. They were written by me over the years and of 
