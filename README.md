@@ -3,7 +3,7 @@
 
 <p>This project is about publishing of a set of sysadmin utilities that help to administer Unix server in a "classic" way: using bash and small scripts or programs that perform some limited, well defined functions.  
    
-<p>This approach is opposite to Ansible, Puppet and friends which reintroduced IBM JCL into Unix environment.
+<p>This approach is opposite to Ansible, Puppet and friends which reintroduced on a new parallel level ideas of IBM JCL into Unix environment -- waterfall execution of steps requires for accomplishing given task. BTW historically Unix shell (and IBM REXX) wiped the floor with JCL.
    
 They were written by me over the years and are of varying quality and usefulness. You can view them as a kind of my personal protest against the overcomplexity of the current sysadmin environment. Now there are many tools available to make simple tasks complex and complex unsolvable. Generally system administration 
 formally moves to the "Windows-way" of doing things -- providing GUI and "blackboxing" internals. Many DevOps toys can be viewed as steps in this 
