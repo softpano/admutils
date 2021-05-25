@@ -72,7 +72,7 @@ have <a href="../unix_conf_management.shtml">their own weak spots</a>&nbsp; And 
 software, much like in women cloth.&nbsp; But again, some of the utilities listed below can be used as steps 
 in Ansible playbooks you develop. </p>
 
-**NOTE**: This page is not maintained often, as I prefer HTML to Markdown. For extended  version  of this page at http://softpanorama.org/Admin/Sp_admin_utils/index.shtml  It also might contain more recent and complete information.
+**NOTE**: This page is not maintained often, as I prefer HTML to Markdown. For extended  version  of this page see http://softpanorama.org/Admin/Sp_admin_utils/index.shtml  It also might contain more recent and complete information.
 
 ## History
 <p><b>[May 05, 2021] <a href="../../../Dotfiles/Eg_install/eg_install.shtml">eg_install.sh Installation script for eg which allow to 
