@@ -27,7 +27,7 @@ its own DSL, you use it as a component and&nbsp; bash as our DSL.
    
 <p>Quality, the level of 
 maturity and usefulness vary. You can view them as a kind of my personal protest against the overcomplexity of the current sysadmin 
-environment. Now there are was too many tools available to make simple tasks complex and complex unsolvable :-)
+environment. Now there are way too many tools available to make simple tasks complex and complex unsolvable :-)
    
 <p>Generally Linux system administration gradually moves to the &quot;Windows-way&quot; of doing things -- to tools that provide GUI and 
 &quot;blackboxing&quot; of OS API and internals. Many DevOps toys can be viewed as steps in this particular direction. Some new subsystems 
