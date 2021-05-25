@@ -1,19 +1,17 @@
 # "Back to basics" -- Softpanorama collection of potentially useful simple sysadmin utilities
 
 
-<p>This project is about publishing of a set of sysadmin utilities that help to administer Unix server in a "classic" way: using bash and small scripts or programs that perform some limited, well defined functions.  
+<p>This project is about publishing of a small set of sysadmin utilities that might help to administer Unix server in a "classic" way: using bash as a glue that connects small scripts or programs each of which perform some limited, well defined function.  
    
-<p>This approach is opposite to Ansible, Puppet and friends which reintroduced on a new parallel level ideas of IBM JCL into Unix environment -- waterfall execution of steps required for accomplishing given task. BTW, historically, Unix shell (and IBM REXX) wiped the floor with JCL.
+<p>In some way, this approach differs from the approach adopted to Ansible, Puppet and similar configuration management systems which reintroduced on a new parallel level ideas of IBM JCL into Unix environment -- waterfall execution of steps required for accomplishing given task. Those utilities, of course, can be used as a part of Ansible scripts when it makes sense. But often using bash and pdsh, parallel or similar tool is simpler and more straightforward, more modifiable, more easily manageable. BTW, historically, Unix shell (and IBM REXX) wiped the floor with JCL.
    
-They were written by me over the years and are of varying quality and usefulness. You can view them as a kind of my personal protest against the overcomplexity of the current sysadmin environment. Now there are many tools available to make simple tasks complex and complex unsolvable. Generally system administration 
-formally moves to the "Windows-way" of doing things -- providing GUI and "blackboxing" internals. Many DevOps toys can be viewed as steps in this 
-particular direction. Some new subsystems like systemd also belong to this category. They all have their place but they all add too much complexity and in small companies adoption of them entails significant risks. 
+<p>They were written by me over the years. Quality, the level of maturity and usefulness vary. You can view them as a kind of my personal protest against the overcomplexity of the current sysadmin environment. Now there are was too many tools available to make simple tasks complex and complex unsolvable :-) 
    
-<p>In this sense you can view this collection as a very small contribution to the&nbsp; "back to basics" movement among sysadmins.</p> 
+<p>Generally Linux system administration gradually moves to the "Windows-way" of doing things -- to tools that provide GUI and "blackboxing" of OS API and internals. Many DevOps toys can be viewed as steps in this particular direction. Some new subsystems like systemd also belong to this category. They all have their place but they all add too much complexity and in small companies adoption of them entails significant risks due to the lack of people able to master them all.   
+   
+<p>In this sense you can view this collection as a very small contribution to the "back to basics" movement among sysadmins.</p> 
 
-<p>Moreover, for small and medium organization adoption of overly complex tools entrain significant risks. If the organization adopted a set of complex tools and a person who known those tool leaves, often the situation 
-deteriorates pretty quickly as there is no cost effective way to replace him/her. Lack of documentation is typical and can bite very hard to the level of 
-partial or complete paralysis.  
+<p>Moreover, for small and medium organization adoption of overly complex tools entrain significant risks. If the organization adopted a set of complex tools and a person who known those tool leaves, often the situation deteriorates pretty quickly as there is no cost effective way to replace him/her. Lack of documentation is typical and can bite very hard to the level of partial or complete paralysis.  
 
 <p>Sticking to classic Unix capabilities often is a better approach to system administration then the adoption of a bunch of complex 
 shiny tools that no normal person can learn in depth in his life.  Drawbacks often cited for "primitive" approaches of managing servers (for example with cloning /etc/passwd /etc/group files using ssh instead of Active directory or some other directory)  can often be 
