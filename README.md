@@ -14,7 +14,7 @@ unified file formats, and pipes and filters.&quot;<p>By sticking to a single int
 based on scripting written in the DSL for particular configuration management system, be it Ansible, Puppet or something else. All 
 of them reintroduced on a new parallel level ideas of IBM JCL into Unix environment -- waterfall execution of steps required for 
 accomplishing given task. Those utilities, of course, can be used as a part of Ansible scripts, when it makes sense. <p>But often using 
-bash and pdsh ( or Ansible in &quot;ad hoc&quot; mode, cexec, parallel or other similar tool) with bash is often simpler and more straightforward, more modifiable, more easily manageable. 
+bash and pdsh ( or Ansible in &quot;ad hoc&quot; mode, cexec, parallel or other similar tool) with bash is simpler and more straightforward, more modifiable, more easily manageable. 
 
 <p>BTW, 
 historically, Unix shell (and IBM REXX) wiped the floor with JCL.&nbsp; So instead of having, say, Ansible as a superstructure with 
