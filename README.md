@@ -1,31 +1,78 @@
 # "Back to basics" -- Softpanorama collection of potentially useful simple sysadmin utilities
 
 
-<p>This project is about publishing of a small set of sysadmin utilities that might help to administer Unix server in a "classic" way: using bash as a glue that connects small scripts or programs each of which perform some limited, well defined function.  
+<p>This project is about publishing of a small set of sysadmin utilities that might help to administer Unix server in a &quot;classic&quot; 
+way: using command line tools, pipes and, if necessary, bash as a glue that connects small scripts (Written in Perl or Python or 
+Ruby), or programs (for example written in GOlang) each of which perform some limited, well defined function.&nbsp; This is an 
+alternative of adopting yet another complex system with yet another DSL (domain specific language) for each and every problem.&nbsp;  
    
-<p>In some way, this approach differs from the approach adopted to Ansible, Puppet and similar configuration management systems which reintroduced on a new parallel level ideas of IBM JCL into Unix environment -- waterfall execution of steps required for accomplishing given task. Those utilities, of course, can be used as a part of Ansible scripts when it makes sense. But often using bash and pdsh, parallel or similar tool is simpler and more straightforward, more modifiable, more easily manageable. BTW, historically, Unix shell (and IBM REXX) wiped the floor with JCL.
-   
-<p>They were written by me over the years. Quality, the level of maturity and usefulness vary. You can view them as a kind of my personal protest against the overcomplexity of the current sysadmin environment. Now there are was too many tools available to make simple tasks complex and complex unsolvable :-) 
-   
-<p>Generally Linux system administration gradually moves to the "Windows-way" of doing things -- to tools that provide GUI and "blackboxing" of OS API and internals. Many DevOps toys can be viewed as steps in this particular direction. Some new subsystems like systemd also belong to this category. They all have their place but they all add too much complexity and in small companies adoption of them entails significant risks due to the lack of people able to master them all.   
-   
-<p>In this sense you can view this collection as a very small contribution to the "back to basics" movement among sysadmins.</p> 
+<p>Actually Unix created a new style of computing, a new way of thinking of how to attack complex problems, especially sysadmin 
+problems. This style was essentially the first successful component model in programming. And despite its age it still holds it own.&nbsp; 
+As Frederick P. Brooks Jr (another computer pioneer who early recognized the importance of pipes) noted, the creators of Unix 
+&quot;...attacked the accidental difficulties that result from using individual programs together, by providing integrated libraries, 
+unified file formats, and pipes and filters.&quot;<p>By sticking to a single integration language (bash), this approach somewhat differs from the approach 
+based on scripting written in the DSL for particular configuration management system, be it Ansible, Puppet or something else. All 
+of them reintroduced on a new parallel level ideas of IBM JCL into Unix environment -- waterfall execution of steps required for 
+accomplishing given task. Those utilities, of course, can be used as a part of Ansible scripts, when it makes sense. <p>But often using 
+bash and pdsh ( or Ansible in &quot;ad hoc&quot; mode, cexec, parallel or other similar tool) with bash is often simpler and more straightforward, more modifiable, more easily manageable. 
 
-<p>Moreover, for small and medium organization adoption of overly complex tools entrain significant risks. If the organization adopted a set of complex tools and a person who known those tool leaves, often the situation deteriorates pretty quickly as there is no cost effective way to replace him/her. Lack of documentation is typical and can bite very hard to the level of partial or complete paralysis.  
+<p>BTW, 
+historically, Unix shell (and IBM REXX) wiped the floor with JCL.&nbsp; So instead of having, say, Ansible as a superstructure with 
+its own DSL, you use it as a component (in &quot;as hoc&quot; mode) and bash as our DSL.
+   
+<p>So instead of having, say, Ansible as a superstructure with 
+its own DSL, you use it as a component and&nbsp; bash as our DSL. 
+
+<p>The utilities in question were written by me over the years and most of them have a common framework "compiler style" framework with the special attention on providing meaningful diagnostic messages. To that extent they all rely of a set of components that provide generation of messages somewhat similar in style to the old IBM PL/1 compliers. Verbosity can be regulated via option -v. 
+   
+<p>Quality, the level of 
+maturity and usefulness vary. You can view them as a kind of my personal protest against the overcomplexity of the current sysadmin 
+environment. Now there are was too many tools available to make simple tasks complex and complex unsolvable :-)
+   
+<p>Generally Linux system administration gradually moves to the &quot;Windows-way&quot; of doing things -- to tools that provide GUI and 
+&quot;blackboxing&quot; of OS API and internals. Many DevOps toys can be viewed as steps in this particular direction. Some new subsystems 
+like systemd also belong to this category. They all have their place but they all add too much complexity and in small companies 
+adoption of them entails significant risks due to the lack of people able to master them all. </p>  
+   
+<p>In this sense you can view this collection as a very small contribution to the &quot;back to basics&quot; movement among sysadmins.</p>
+
+<p>Moreover, for small and medium organization adoption of overly complex tools entrain significant risks. If the organization 
+adopted a set of complex tools and a person who known those tool leaves, often the situation deteriorates pretty quickly as there is 
+no cost effective way to replace him/her. Lack of documentation is typical and can bite very hard to the level of partial or 
+complete paralysis.</p>
 
 <p>Sticking to classic Unix capabilities often is a better approach to system administration then the adoption of a bunch of complex 
-shiny tools that no normal person can learn in depth in his life.  Drawbacks often cited for "primitive" approaches of managing servers (for example with cloning /etc/passwd /etc/group files using ssh instead of Active directory or some other directory)  can often be 
-compensated quite easity (for example with the automatic synchronization of passwd files on demand via ssh form some "etalon" server, see below ; it is also possible decompile and generate useradd command using diff of two passwd/group files).&nbsp; 
+shiny tools that no normal person can learn in depth in his life. Drawbacks often cited for &quot;primitive&quot; approaches of managing 
+servers (for example with cloning /etc/passwd /etc/group files using ssh instead of Active directory or some other directory) can 
+often be compensated quite easity (for example with the automatic synchronization of passwd files on demand via ssh form some 
+&quot;etalon&quot; server, see below ; it is also possible decompile and generate useradd command using diff of two passwd/group files). 
 Similarly a lot of collection of data for monitoring can be done using NFS3 and does not require SSH or some proprietary protocol. 
-And analysis of logs is better performed by&nbsp; custom utilities tuned to your particular situation or at least enhanced third 
-party scripts, instead of some complex system. Same is true for backup although here&nbsp; your mileage may vary. Often &quot;bare metal&quot; 
-backup can be done via tar or Rsync and does not require complex tools with additional (and probably less secure then ssh) 
-protocols. </p>
+And analysis of logs is better performed by custom utilities tuned to your particular situation or at least enhanced third party 
+scripts, instead of some complex system. Same is true for backup although here your mileage may vary. Often &quot;bare metal&quot; backup can 
+be done via tar or Rsync and does not require complex tools with additional (and probably less secure then ssh) protocols.</p>
 
-<p>At the same time classic Unix provides unmatched flexibility which some modern approaches considerably diminish squeezing sysadmin into 
-<a href="https://en.wikipedia.org/wiki/Procrustes">Procrustes bed</a> of badly designed and overly&nbsp; complex solutions.</p>
+<p>At the same time classic Unix provides unmatched flexibility which some modern approaches considerably diminish squeezing 
+sysadmin into
+<a rel="nofollow" style="box-sizing: border-box; background-color: rgb(255, 255, 255); color: var(--color-text-link); text-decoration: underline; outline-width: 0px; font-family: -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Helvetica, Arial, sans-serif, &quot;Apple Color Emoji&quot;, &quot;Segoe UI Emoji&quot;; font-size: 16px; font-style: normal; font-variant-ligatures: normal; font-variant-caps: normal; font-weight: 400; letter-spacing: normal; orphans: 2; text-align: start; text-indent: 0px; text-transform: none; white-space: normal; widows: 2; word-spacing: 0px; -webkit-text-stroke-width: 0px;" href="https://en.wikipedia.org/wiki/Procrustes">
+Procrustean bed</a> of badly designed and overly complex solutions.</p>
 
-**NOTE**: This page is not maintained often, as I prefer HTML to Markdown. See html version of this page at http://softpanorama.org/Admin/Sp_admin_utils/index.shtml for more recent and complete information.
+<p>Initially I published on GitHub three utilities from this set:
+<a itemprop="name codeRepository" href="https://github.com/softpano/neatperl">neatperl</a>,
+<a href="https://github.com/softpano/neatbash">neatbash</a> and <a href="https://github.com/softpano/saferm">saferm</a> . IMHO 
+neatbash fills the &quot;missing link in creation of simple bash IDE, based on Midnight commander and some editor (say, vim). I thought 
+that sysadmin will appreciate and it will use it. Unfortunately it was 
+by-and-large ignored. And for developers one of main stimulus for further development is the positive feedback loop.&nbsp; As Fred Brooks 
+notes in 1975 in his groundbreaking book &quot;The Mythical Man-Month: Essays on Software Engineering&quot; <em>the difference in effort required 
+to produce the&nbsp; utility &quot;for yourself&quot; and its publishable form can be ten times or more. </em>This sacrifices in 
+time and&nbsp; effort is difficult to commit too if you suspect that this is all&nbsp; &quot;putting program on the shelf&quot; activity -- 
+creating programs that nobody will use.&nbsp; My only hope is that&nbsp; &quot;back to basics&quot; movement will strengthen with time.</p>
+
+<p>The trend now is toward &quot;integrated&quot; configuration management solutions like Ansible ( reinvention of IBM JCL on a new level), which 
+have <a href="../unix_conf_management.shtml">their own weak spots</a>&nbsp; And it is difficult to fight against fashion in 
+software, much like in women cloth.&nbsp; But again, some of the utilities listed below can be used as steps 
+in Ansible playbooks you develop. </p>
+
+**NOTE**: This page is not maintained often, as I prefer HTML to Markdown. For extended  version  of this page at http://softpanorama.org/Admin/Sp_admin_utils/index.shtml  It also might contain more recent and complete information.
 
 ## History
 <p><b>[May 05, 2021] <a href="../../../Dotfiles/Eg_install/eg_install.shtml">eg_install.sh Installation script for eg which allow to 
